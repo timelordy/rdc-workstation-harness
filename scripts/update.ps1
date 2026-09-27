@@ -86,7 +86,6 @@ $installArgs = @{
     InstallRoot = $InstallRoot
     DesktopAgentPort = [int]$state.desktop_agent_port
     BrowserBridgePort = [int]$state.browser_bridge_port
-    RevitBridgePort = [int]$state.revit_bridge_port
     Browser = [string]$state.browser
     RemoteCommanderVersion = [string]$state.remote_commander_version
     UpdateChannel = [string]$state.update_channel

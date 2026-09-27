@@ -6,7 +6,7 @@
 Набор для развёртывания управляемого AI‑рабочего места на Windows вокруг
 Remote Desktop Commander: файловая система и процессы через RDC, браузер через
 Playwright, обычные окна через UI Automation/Win32, приложения — через COM или
-небольшие адаптеры. Revit‑мост поставляется отдельно и необязателен.
+небольшие адаптеры.
 
 > Это локальный привилегированный инструмент для доверенного рабочего ПК.
 > Он не является сетевым API, сервером общего доступа или средством скрытого
@@ -21,7 +21,6 @@ Playwright, обычные окна через UI Automation/Win32, прилож
 | Desktop Agent | UIA, Win32, COM, Python/PowerShell, адаптеры | `127.0.0.1:17322` |
 | Browser Bridge | DOM/ARIA‑управление браузером через Playwright | `127.0.0.1:17321` |
 | MCP proxy | отдаёт Desktop Agent MCP‑совместимому клиенту | stdio |
-| Revit Bridge | выполняет C# на главном потоке Revit | `127.0.0.1:17323` |
 | `rdc_web.py` | предохранитель для заметных браузерных действий | CLI |
 ## Архитектура
 
@@ -36,7 +35,6 @@ Remote Desktop Commander Remote
           |      +-- UI Automation / Win32
           |      +-- Python / PowerShell / subprocess
           |      +-- COM and app adapters
-          |      +-- optional Revit adapter -> :17323
           |
           +-- browser-bridge :17321
                  +-- Playwright locators
@@ -106,19 +104,6 @@ Chromium Playwright, если он установлен. Можно выбрат
 Профиль моста отдельный. Личные пароли и cookies из обычного профиля браузера
 автоматически не копируются. В нужные сайты коллега входит сам в своём профиле.
 
-## Revit 2022–2024
-
-Revit‑мост не ставится базовым установщиком:
-
-```powershell
-.\scripts\install-revit-bridge.ps1 -RevitYear 2022
-```
-
-Он собирается локально против `RevitAPI.dll` установленной версии и после
-перезапуска Revit слушает только loopback. Текущая реализация использует
-.NET Framework и не заявляет совместимость с Revit 2025+; для них нужен
-отдельный порт под .NET 8.
-
 ## Управление
 
 ```powershell
@@ -155,14 +140,12 @@ Remote Commander. Их можно удалить явными ключами —
 ## Безопасная граница
 
 - Собственные службы намеренно привязаны к `127.0.0.1`; не меняйте это на
-  `0.0.0.0` и не пробрасывайте порты 17321–17323 напрямую.
+  `0.0.0.0` и не пробрасывайте порты 17321–17322 напрямую.
 - Токены лежат только локально в `%USERPROFILE%\.chatgpt-desktop-agent`.
 - Физический ввод отключён по умолчанию; его включение должно быть явным для
   конкретного вызова.
 - Browser Bridge обладает правами текущего браузерного профиля. Считайте его
   токен таким же чувствительным, как активную сессию браузера.
-- Revit‑мост умеет компилировать и выполнять C# внутри Revit. Устанавливайте его
-  только на доверенном ПК и не отдавайте порт/токен внешним процессам.
 - Remote Commander — внешняя зависимость. Репозиторий не содержит его исходники,
   учётные данные или `device.json`.
 
@@ -173,7 +156,6 @@ Remote Commander. Их можно удалить явными ключами —
 ```text
 src/desktop_agent/   локальный роутер, UIA/COM и MCP proxy
 src/browser_bridge/  Playwright HTTP/stdio bridge
-src/revit_bridge/    исходник необязательного Revit add-in
 scripts/             установка, диагностика, запуск и удаление
 tools/               фасад rdc_web с журналом и commit-gate
 examples/            безопасные read-only payload-примеры
@@ -188,7 +170,6 @@ tests/               static security/regression checks
 - [Remote Desktop Commander](docs/REMOTE_COMMANDER_RU.md)
 - [Подключение MCP-клиента](docs/MCP_CLIENT_RU.md)
 - [Browser Bridge](docs/BROWSER_BRIDGE_RU.md)
-- [Revit Bridge](docs/REVIT_RU.md)
 - [Эксплуатация](docs/OPERATIONS_RU.md)
 - [Навигатор обновлений](docs/UPDATES_RU.md)
 - [Устранение проблем](docs/TROUBLESHOOTING_RU.md)
@@ -201,7 +182,6 @@ tests/               static security/regression checks
 - Custom/GPU‑интерфейсы иногда требуют native API или визуального fallback.
 - Автоматизация браузера не отменяет подтверждения перед платежом, публикацией,
   отправкой сообщения или другим внешним действием.
-- Поддержка Revit 2025+ пока отсутствует.
 
 ## Разработка
 
@@ -218,5 +198,5 @@ python -m unittest discover -s tests -v
 ## Лицензия и зависимости
 
 Собственный код проекта распространяется по MIT. Remote Desktop Commander,
-Playwright, MCP SDK, Autodesk Revit API и остальные зависимости имеют свои
+Playwright, MCP SDK и остальные зависимости имеют свои
 лицензии и устанавливаются отдельно. См. [THIRD_PARTY.md](THIRD_PARTY.md).

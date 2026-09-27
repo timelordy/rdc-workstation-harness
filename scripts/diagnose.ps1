@@ -3,8 +3,7 @@
 param(
     [string]$InstallRoot = "$env:LOCALAPPDATA\RdcWorkstationHarness",
     [ValidateRange(1024, 65535)][int]$DesktopAgentPort = 17322,
-    [ValidateRange(1024, 65535)][int]$BrowserBridgePort = 17321,
-    [ValidateRange(1024, 65535)][int]$RevitBridgePort = 17323
+    [ValidateRange(1024, 65535)][int]$BrowserBridgePort = 17321
 )
 
 Set-StrictMode -Version Latest
@@ -86,7 +85,6 @@ foreach ($name in @("desktop.token", "browser.token")) {
 
 Test-Health "Desktop agent" $DesktopAgentPort $true
 Test-Health "Browser bridge" $BrowserBridgePort $true
-Test-Health "Revit bridge" $RevitBridgePort $false
 
 $TaskNames = @(
     "RDC Harness - Desktop Agent",
@@ -111,7 +109,7 @@ if (Test-Path $DeviceIdentity) { Report "OK" "Remote Commander has a local devic
 else { Report "WARN" "Remote Commander is not paired on this workstation" }
 try {
     $listeners = Get-NetTCPConnection -State Listen -ErrorAction Stop |
-        Where-Object { $_.LocalPort -in @($DesktopAgentPort, $BrowserBridgePort, $RevitBridgePort) }
+        Where-Object { $_.LocalPort -in @($DesktopAgentPort, $BrowserBridgePort) }
     foreach ($listener in $listeners) {
         if ($listener.LocalAddress -in @("127.0.0.1", "::1")) {
             Report "OK" "Port $($listener.LocalPort) is loopback-only"

@@ -22,7 +22,6 @@ AI client
                  +-- generic runtime
                  +-- app adapters
                  +-- Browser Bridge :17321
-                 +-- Revit Bridge :17323 (optional)
 ```
 
 Remote Desktop Commander и собственные локальные службы решают разные задачи.
@@ -67,7 +66,7 @@ placeholder, test id, text или CSS selector.
 ## App adapters
 
 Адаптеры лежат в `src/desktop_agent/adapters`. Core не должен разрастаться
-логикой AutoCAD, Revit, Navisworks и каждого следующего приложения.
+логикой AutoCAD, Navisworks и каждого следующего приложения.
 
 Предпочтительный adapter flow:
 
@@ -82,18 +81,9 @@ UIA? ----------------> semantic control
 none ----------------> visual/physical fallback
 ```
 
-В репозитории есть AutoCAD COM adapter и Revit adapter. Новые интеграции должны
+В репозитории есть AutoCAD COM adapter. Новые интеграции должны
 использовать публичный интерфейс приложения и иметь понятную границу side effects.
 
-## Revit Bridge
-
-Revit API нельзя безопасно вызывать из произвольного HTTP-потока. Add-in кладёт
-запрос в очередь, а обработка выполняется на главном потоке Revit через `Idling`.
-Bridge существует только пока Revit запущен.
-
-Текущая реализация динамически компилирует тело C# внутри процесса Revit. Это
-мощная возможность, поэтому add-in является необязательным и устанавливается
-отдельно только на доверенной машине.
 ## Жизненный цикл процессов
 
 Windows Task Scheduler запускает по одному watchdog на компонент. Watchdog:
@@ -110,7 +100,7 @@ Windows Task Scheduler запускает по одному watchdog на ком
 
 ```text
 %LOCALAPPDATA%\RdcWorkstationHarness\  runtime, venv, logs, browser profile
-%USERPROFILE%\.chatgpt-desktop-agent\  desktop/browser/revit tokens
+%USERPROFILE%\.chatgpt-desktop-agent\  desktop/browser tokens
 %USERPROFILE%\.desktop-commander-device\ identity конкретного RDC-устройства
 %USERPROFILE%\Downloads\rdc-harness*\  создаваемые artifacts/downloads
 ```
@@ -120,7 +110,7 @@ Windows Task Scheduler запускает по одному watchdog на ком
 
 ## Сетевая граница
 
-Порты 17321–17323 предназначены только для loopback. Для удалённой связи
+Порты 17321–17322 предназначены только для loopback. Для удалённой связи
 используется транспорт Remote Desktop Commander, а не прямой проброс HTTP.
 `diagnose.ps1` отмечает ошибкой любой listener этих портов не на `127.0.0.1`/`::1`.
 
@@ -128,7 +118,6 @@ Windows Task Scheduler запускает по одному watchdog на ком
 
 - копирование основного браузерного профиля с паролями и cookies;
 - локальные токены, logs, screenshots и output-файлы;
-- заранее собранная Revit DLL;
 - две конкурирующие схемы автозапуска;
 - экспериментальный Codex app-server keepalive на нестабильном интерфейсе;
 - process injection и изменение памяти приложений.

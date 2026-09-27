@@ -21,7 +21,6 @@ Health endpoints:
 ```text
 http://127.0.0.1:17321/health  Browser Bridge
 http://127.0.0.1:17322/health  Desktop Agent
-http://127.0.0.1:17323/health  Revit Bridge, только при открытом Revit
 ```
 
 ## Logs
@@ -100,9 +99,9 @@ backup репозитория.
 
 ## Плановая проверка
 
-После обновления Windows, Python, Node.js, браузера, Playwright или Revit:
+После обновления Windows, Python, Node.js, браузера или Playwright:
 
 1. запустите `diagnose.ps1`;
 2. проверьте простой read-only сценарий;
 3. проверьте один locator в Browser Bridge;
-4. только затем разрешайте внешние действия или изменения BIM-модели.
+4. только затем разрешайте внешние действия.

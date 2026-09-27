@@ -4,6 +4,7 @@ param(
     [string]$InstallRoot = "$env:LOCALAPPDATA\RdcWorkstationHarness",
     [ValidateRange(1024, 65535)][int]$DesktopAgentPort = 17322,
     [ValidateRange(1024, 65535)][int]$BrowserBridgePort = 17321,
+    # Accepted only so the v0.1.0 updater can invoke this installer.
     [ValidateRange(1024, 65535)][int]$RevitBridgePort = 17323,
     [ValidateSet("auto", "brave", "chrome", "edge", "bundled")]
     [string]$Browser = "auto",
@@ -250,7 +251,6 @@ $Config = @"
 `$env:RDC_HARNESS_TOKEN_DIR = '$(Quote-Single $TokenDir)'
 `$env:DESKTOP_AGENT_PORT = '$DesktopAgentPort'
 `$env:PW_BRIDGE_PORT = '$BrowserBridgePort'
-`$env:REVIT_BRIDGE_PORT = '$RevitBridgePort'
 `$env:NODE_EXE = '$(Quote-Single $Node)'
 `$env:DESKTOP_AGENT_ARTIFACT_DIR = '$(Quote-Single $ArtifactDir)'
 `$env:PW_PROFILE_DIR = '$(Quote-Single $ProfileDir)'
@@ -330,7 +330,6 @@ $InstallState = [ordered]@{
     no_autostart = [bool]$NoAutostart
     desktop_agent_port = $DesktopAgentPort
     browser_bridge_port = $BrowserBridgePort
-    revit_bridge_port = $RevitBridgePort
 }
 Write-Utf8NoBom (Join-Path $InstallRoot "install-state.json") `
     (($InstallState | ConvertTo-Json -Depth 6) + "`n")

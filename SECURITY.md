@@ -10,7 +10,7 @@ This project is designed for one trusted Windows workstation and one trusted
 user session. Its own services must remain bound to `127.0.0.1`. Local
 credentials and browser state stay outside the repository.
 
-Do not expose ports 17321–17323 directly to a LAN, VPN or the public internet.
+Do not expose ports 17321–17322 directly to a LAN, VPN or the public internet.
 Do not copy a workstation identity or browser profile to another computer.
 
 ## Reporting

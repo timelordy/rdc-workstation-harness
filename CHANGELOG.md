@@ -2,6 +2,13 @@
 
 All notable changes are documented here.
 
+## [0.1.1] - 2026-09-27
+
+### Removed
+
+- Revit Bridge source, adapter, installation scripts, examples and active documentation.
+- Revit Bridge configuration and checks from install, update, diagnose and uninstall scripts. The installer still accepts the old port argument so the v0.1.0 updater can complete this upgrade.
+
 ## [0.1.0] - 2026-09-27
 
 ### Added

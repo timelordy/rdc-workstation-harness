@@ -72,18 +72,6 @@ Get-ScheduledTask -TaskName "RDC Harness - Remote Commander"
 
 Для custom/GPU UI сначала ищите native API, COM, CLI или adapter. Координаты
 мыши являются последним fallback и требуют явного `allow_physical=true`.
-## Revit Bridge не загружается
-
-Проверьте совпадение года Revit, manifest и DLL:
-
-```powershell
-Get-ChildItem $env:APPDATA\Autodesk\Revit\Addins -Filter RdcHarness.RevitBridge.addin -Recurse
-.\scripts\install-revit-bridge.ps1 -RevitYear 2022
-```
-
-После установки полностью перезапустите Revit. Для 2025+ текущую сборку не
-используйте: там другой runtime .NET, и оптимизм не является ABI-совместимостью.
-
 ## Чистый сброс runtime
 
 Сначала сохраните нужные локальные результаты. Затем:

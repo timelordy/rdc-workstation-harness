@@ -52,10 +52,6 @@ if (Test-Path $InstallRoot) {
     }
 }
 
-Get-ChildItem "$env:APPDATA\Autodesk\Revit\Addins" -Filter "RdcHarness.RevitBridge.addin" `
-    -File -Recurse -ErrorAction SilentlyContinue |
-    Remove-Item -Force -ErrorAction SilentlyContinue
-
 if ($RemoveTokens) {
     Remove-Item (Join-Path $env:USERPROFILE ".chatgpt-desktop-agent") `
         -Recurse -Force -ErrorAction SilentlyContinue

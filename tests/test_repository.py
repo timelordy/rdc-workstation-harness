@@ -35,7 +35,7 @@ class RepositoryContractTests(unittest.TestCase):
 
     def test_no_runtime_secrets_or_generated_binaries(self):
         forbidden_names = {
-            "device.json", "desktop.token", "browser.token", "revit.token",
+            "device.json", "desktop.token", "browser.token",
             "storage-state.json",
         }
         forbidden_suffixes = {".dll", ".pdb", ".pyc", ".zip"}
@@ -61,12 +61,10 @@ class RepositoryContractTests(unittest.TestCase):
     def test_loopback_only_bindings_are_code_invariants(self):
         agent = read("src/desktop_agent/agent.py")
         browser = read("src/browser_bridge/bridge.js")
-        revit = read("src/revit_bridge/RevitBridge.cs")
         self.assertIn('HOST = "127.0.0.1"', agent)
         self.assertNotIn('HOST = "0.0.0.0"', agent)
         self.assertIn("server.listen(PORT, '127.0.0.1'", browser)
         self.assertNotIn("server.listen(PORT, '0.0.0.0'", browser)
-        self.assertIn("IPAddress.Loopback", revit)
 
     def test_physical_input_is_disabled_by_default(self):
         agent = read("src/desktop_agent/agent.py")
@@ -76,7 +74,6 @@ class RepositoryContractTests(unittest.TestCase):
     def test_installer_config_here_string_is_not_corrupted(self):
         installer = read("scripts/install.ps1")
         self.assertNotIn('$Config += @"', installer)
-        self.assertIn("`$env:REVIT_BRIDGE_PORT", installer)
         self.assertIn("`$env:NODE_EXE", installer)
         self.assertIn("Write-PowerShellFile $ConfigPath $Config", installer)
         self.assertIn('$Config += "`r`n`$env:PW_EXECUTABLE', installer)

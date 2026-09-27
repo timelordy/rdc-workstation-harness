@@ -17,7 +17,6 @@ licenses and trademarks.
 | Pillow | image handling | 11.3.0 | PyPI, HPND |
 | psutil | process inspection | 7.0.0 | PyPI, BSD-3-Clause |
 | pyperclip | clipboard fallback | 1.9.0 | PyPI, BSD-3-Clause |
-| Autodesk Revit API | optional Revit integration | installed locally | Autodesk terms |
 
 Versions in this table are the versions used to build and test release 0.1.0;
 they are not a statement that newer releases do not exist. Lockfiles and
