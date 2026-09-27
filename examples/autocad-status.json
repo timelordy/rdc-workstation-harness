@@ -1,0 +1,7 @@
+{
+  "action": "adapter_call",
+  "name": "autocad",
+  "payload": {
+    "action": "status"
+  }
+}

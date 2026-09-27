@@ -1,0 +1,7 @@
+{
+  "action": "adapter_call",
+  "name": "revit",
+  "payload": {
+    "action": "status"
+  }
+}

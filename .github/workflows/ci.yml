@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: |
+            src/browser_bridge/package-lock.json
+            src/desktop_agent/mcp/package-lock.json
+      - name: Validate Python syntax
+        run: python -m compileall -q src tools tests
+      - name: Validate Node syntax
+        shell: pwsh
+        run: |
+          node --check src/browser_bridge/bridge.js
+          node --check src/desktop_agent/mcp/server.mjs
+      - name: Validate PowerShell syntax
+        shell: pwsh
+        run: |
+          $failed = $false
+          Get-ChildItem scripts -Filter *.ps1 | ForEach-Object {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              $_.FullName, [ref]$tokens, [ref]$errors)
+            if ($errors) {
+              $failed = $true
+              $errors | ForEach-Object { Write-Error "$($_.Extent.File):$($_.Extent.StartLineNumber) $($_.Message)" }
+            }
+          }
+          if ($failed) { exit 1 }
+      - name: Verify browser lockfile
+        working-directory: src/browser_bridge
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Verify MCP lockfile
+        working-directory: src/desktop_agent/mcp
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Run regression tests
+        run: python -m unittest discover -s tests -v

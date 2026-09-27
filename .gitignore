@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Runtime state and credentials
+*.token
+*.env
+.env*
+tokens/
+.chatgpt-desktop-agent/
+.desktop-commander-device/
+browser-profile/
+storage-state.json
+browser_state.json
+cookies*.json
+
+# Generated data
+*.log
+*.ndjson
+artifacts/
+outbox/
+build/
+dist/
+*.dll
+*.pdb
+*.zip
+screenshots/
+*.png
+
+# Local configuration
+config.ps1
+local-*.ps1
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

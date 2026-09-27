@@ -1,0 +1,6 @@
+{
+  "action": "browser",
+  "payload": {
+    "action": "snapshot"
+  }
+}

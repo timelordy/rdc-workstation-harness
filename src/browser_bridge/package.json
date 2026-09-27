@@ -1,0 +1,14 @@
+{
+  "name": "rdc-harness-browser-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Loopback-only Playwright bridge for rdc-workstation-harness",
+  "license": "MIT",
+  "type": "commonjs",
+  "scripts": {
+    "check": "node --check bridge.js"
+  },
+  "dependencies": {
+    "playwright": "1.63.0"
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "action": "browser",
+  "payload": {
+    "action": "goto",
+    "url": "https://example.com"
+  }
+}
