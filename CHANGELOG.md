@@ -2,6 +2,13 @@
 
 All notable changes are documented here.
 
+## [0.2.2] - 2026-09-28
+
+### Added
+
+- `tools/rdc_share_hook.mjs`: loaded into the Remote Desktop Commander device agent with `node --import`. For remote `read_file` of images and documents it publishes the file through `RDC_HARNESS_SHARE_CMD` and appends a link to the result, dropping the image block for clients that do not render it (ChatGPT returns `{}` for such results). ChatGPT gets a working link on its native path, without custom instructions. No change when sharing is not configured; fails open.
+- The installer starts Remote Commander with the hook. Node tests for the hook run in CI.
+
 ## [0.2.1] - 2026-09-28
 
 ### Added

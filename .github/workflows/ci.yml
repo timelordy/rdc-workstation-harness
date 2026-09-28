@@ -35,6 +35,9 @@ jobs:
         run: |
           node --check src/browser_bridge/bridge.js
           node --check src/desktop_agent/mcp/server.mjs
+          node --check tools/rdc_share_hook.mjs
+      - name: Run Node tests
+        run: node --test tests/share_hook.test.mjs
       - name: Validate PowerShell syntax
         shell: pwsh
         run: |

@@ -5,9 +5,9 @@ ChatGPT в браузере не запускает локальный MCP proxy
 Поэтому ChatGPT работает с harness через терминал (`pc-agent`) и файлы.
 
 ```text
-ChatGPT (web) -> mcp.desktopcommander.app -> RDC на ПК
+ChatGPT (web) -> mcp.desktopcommander.app -> RDC на ПК (+ share hook)
     start_process: pc-agent ...   -> Desktop Agent :17322
-    read_file: <путь к картинке>  -> картинка в чате
+    read_file: <картинка/документ> -> текст со ссылкой на файл
 ```
 
 ## pc-agent
@@ -77,8 +77,37 @@ Remote Commander после её установки не нужно. Помни�
 Пиксель картинки переводится в экранные координаты по полям ответа:
 `screen_x = screen_rect.left + image_x / scale`.
 
-## Инструкция для ChatGPT
+## Нативный путь без инструкций: share hook
 
+ChatGPT видит только фиксированный список инструментов облачного RDC
+(`read_file`, `start_process`, ...). Список собирается в облаке; устройство
+передаёт туда лишь версию, так что свой инструмент или описание добавить нельзя.
+Без инструкций ChatGPT делает скриншот своим способом и открывает его
+`read_file` — это и есть точка, где harness может помочь.
+
+`tools/rdc_share_hook.mjs` загружается в агент RDC на ПК (`node --import ...
+index.js remote`; установщик с `-InstallRemoteCommander` делает это сам) и
+дополняет ответ удалённого `read_file`:
+
+- для картинок и документов (`png/jpg/gif/webp/bmp`, `pdf/docx/xlsx/pptx/dwg/...`)
+  файл публикуется через `RDC_HARNESS_SHARE_CMD`, а в ответ добавляется текст
+  со ссылкой, который модель передаёт пользователю;
+- image block удаляется для всех клиентов, кроме Claude: ChatGPT превращает
+  ответ с картинкой в пустой `{}`, и ссылка пропала бы вместе с ней;
+- без `RDC_HARNESS_SHARE_CMD`, для текстовых файлов и других инструментов ответ
+  не меняется; при любой ошибке хука возвращается исходный ответ;
+- один и тот же файл публикуется один раз; события пишутся в
+  `%USERPROFILE%\.rdc-workstation-harness\logs\share-hook.ndjson`.
+
+Хук меняет поведение пакета Remote Desktop Commander, не редактируя его файлы,
+через патч `DesktopCommanderIntegration.callClientTool`. Если пакет
+переименует этот метод, хук запишет `hook_not_installed` в журнал и ничего не
+сломает. Публикация добавляет несколько секунд к `read_file` картинки.
+
+## Инструкция для ChatGPT (необязательно)
+
+С share hook ссылки приходят и без инструкций. Инструкция ускоряет работу
+(`pc-agent look` снимает окно в фоне) и открывает остальные возможности harness.
 Вставьте в инструкции проекта ChatGPT или в custom instructions:
 
 ```text

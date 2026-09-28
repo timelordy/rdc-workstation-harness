@@ -89,6 +89,12 @@ class RepositoryContractTests(unittest.TestCase):
         self.assertIn(b"\r\n", wrapper)
         self.assertIn(b"pc_agent.py", wrapper)
 
+    def test_remote_commander_runs_with_share_hook(self):
+        installer = read("scripts/install.ps1")
+        self.assertIn("tools\\rdc_share_hook.mjs", installer)
+        self.assertIn("--import `$hook", installer)
+        self.assertTrue((ROOT / "tools" / "rdc_share_hook.mjs").exists())
+
     def test_version_and_changelog_match(self):
         version = read("VERSION").strip()
         self.assertRegex(version, r"^\d+\.\d+\.\d+$")
