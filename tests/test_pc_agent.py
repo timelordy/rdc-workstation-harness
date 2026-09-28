@@ -40,11 +40,64 @@ class PcAgentParseTests(unittest.TestCase):
             self.assertEqual(target.resolve(), Path(short).resolve())
             self.assertTrue(short.endswith("look.jpg"), short)
 
+    def test_look_share_flag(self):
+        self.assertTrue(PC.parse(["look", "--share"])["_share"])
+        self.assertNotIn("_share", PC.parse(["look"]))
+
     def test_base64_never_reaches_terminal(self):
         blob = "A" * 50000
         cleaned = PC.strip_images({"ok": True, "result": {"image": {"data": blob}, "path": "x"}})
         self.assertNotIn(blob, str(cleaned))
         self.assertEqual("x", cleaned["result"]["path"])
+
+
+class ShareTests(unittest.TestCase):
+    """The share hook runs a user-chosen command; nothing is uploaded by default."""
+
+    def setUp(self):
+        import os
+        import tempfile
+        self.tmp = tempfile.TemporaryDirectory()
+        self.file = Path(self.tmp.name) / "shot.jpg"
+        self.file.write_bytes(b"\xff\xd8x")
+        self._saved = os.environ.get(PC.SHARE_ENV)
+        self._saved_cmd = PC.share_command
+
+    def tearDown(self):
+        import os
+        PC.share_command = self._saved_cmd
+        if self._saved is None:
+            os.environ.pop(PC.SHARE_ENV, None)
+        else:
+            os.environ[PC.SHARE_ENV] = self._saved
+        self.tmp.cleanup()
+
+    def _uploader(self, body):
+        script = Path(self.tmp.name) / "up.py"
+        script.write_text(body, encoding="utf-8")
+        import sys
+        PC.share_command = lambda: f'"{sys.executable}" "{script}"'
+
+    def test_not_configured_uploads_nothing(self):
+        PC.share_command = lambda: None
+        result = PC.share(self.file)
+        self.assertFalse(result["ok"])
+        self.assertIn(PC.SHARE_ENV, result["error"])
+
+    def test_last_stdout_line_is_the_url_and_path_is_last_arg(self):
+        self._uploader(
+            "import sys, pathlib\n"
+            "assert pathlib.Path(sys.argv[-1]).read_bytes()[:2] == b'\\xff\\xd8'\n"
+            "print('uploading...')\n"
+            "print('https://example.test/s/abc')\n"
+        )
+        self.assertEqual({"ok": True, "url": "https://example.test/s/abc"}, PC.share(self.file))
+
+    def test_command_without_url_fails(self):
+        self._uploader("import sys\nprint('oops', file=sys.stderr)\nsys.exit(2)\n")
+        result = PC.share(self.file)
+        self.assertFalse(result["ok"])
+        self.assertIn("oops", result["stderr"])
 
 
 if __name__ == "__main__":
