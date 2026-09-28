@@ -1,7 +1,6 @@
 import ctypes
 import hashlib
 import importlib.util
-import json
 import mimetypes
 import os
 import shutil
@@ -13,8 +12,8 @@ from pathlib import Path
 import psutil
 import win32api
 import win32com.client
-import win32con
 import win32gui
+import win32process
 import win32ui
 from PIL import Image
 
@@ -24,6 +23,25 @@ OUTBOX_DIR = BASE_DIR / "outbox"
 ADAPTER_DIR.mkdir(parents=True, exist_ok=True)
 OUTBOX_DIR.mkdir(parents=True, exist_ok=True)
 OBJECTS = {}
+_ADAPTER_CACHE = {}  # name -> (mtime_ns, module)
+
+_HOME = Path(os.getenv("USERPROFILE", str(Path.home())))
+# Files under these directories must never leave the machine through file_handoff.
+PROTECTED_DIRS = [
+    Path(os.getenv("RDC_HARNESS_TOKEN_DIR", str(_HOME / ".chatgpt-desktop-agent"))),
+    _HOME / ".desktop-commander-device",
+    Path(os.getenv("PW_PROFILE_DIR", str(_HOME / ".rdc-workstation-harness" / "browser-profile"))),
+]
+PROTECTED_SUFFIXES = {".token"}
+
+
+class ActionError(ValueError):
+    """A request error the caller can fix; `hint` tells the model how."""
+
+    def __init__(self, message, hint=None, **extra):
+        super().__init__(message)
+        self.hint = hint
+        self.extra = extra
 
 
 def json_safe(value, depth=0):
@@ -39,10 +57,12 @@ def json_safe(value, depth=0):
         return list(value)
     except Exception:
         return repr(value)
+
+
 def run_command(a):
     command = a.get("command")
     if command is None:
-        raise ValueError("command required")
+        raise ActionError("command required")
     timeout = max(1, min(float(a.get("timeout", 120)), 3600))
     cwd = a.get("cwd") or None
     env = os.environ.copy()
@@ -69,7 +89,7 @@ def run_command(a):
 def run_python(a):
     code = a.get("code")
     if code is None:
-        raise ValueError("code required")
+        raise ActionError("code required")
     payload = dict(a)
     payload["command"] = [sys.executable, "-c", str(code)]
     payload["shell"] = False
@@ -79,7 +99,7 @@ def run_python(a):
 def run_powershell(a):
     code = a.get("code")
     if code is None:
-        raise ValueError("code required")
+        raise ActionError("code required")
     payload = dict(a)
     payload["command"] = [
         "powershell.exe", "-NoProfile", "-NonInteractive",
@@ -87,32 +107,67 @@ def run_powershell(a):
     ]
     payload["shell"] = False
     return run_command(payload)
-def list_adapters():
-    items = []
-    for path in sorted(ADAPTER_DIR.glob("*.py")):
-        if path.name.startswith("_"):
-            continue
-        items.append({
-            "name": path.stem,
-            "path": str(path),
-            "mtime": path.stat().st_mtime,
-        })
-    return items
+
+
+# --- adapters ------------------------------------------------------------
+
+def _check_adapter_name(name):
+    if not name or not str(name).replace("_", "").replace("-", "").isalnum():
+        raise ActionError("invalid adapter name", hint="use letters, digits, '_' or '-'")
 
 
 def load_adapter(name):
-    if not name or not name.replace("_", "").replace("-", "").isalnum():
-        raise ValueError("invalid adapter name")
+    _check_adapter_name(name)
     path = ADAPTER_DIR / f"{name}.py"
     if not path.exists():
-        raise FileNotFoundError(str(path))
-    module_name = f"desktop_agent_adapter_{name}_{path.stat().st_mtime_ns}"
+        names = [item["name"] for item in list_adapters(with_manifest=False)]
+        raise ActionError(f"adapter not found: {name}", hint="see adapter_list", adapters=names)
+    mtime = path.stat().st_mtime_ns
+    cached = _ADAPTER_CACHE.get(name)
+    if cached and cached[0] == mtime:
+        return cached[1]
+    module_name = f"desktop_agent_adapter_{name}"
     spec = importlib.util.spec_from_file_location(module_name, path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"cannot load adapter {name}")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    _ADAPTER_CACHE[name] = (mtime, module)
     return module
+
+
+def adapter_manifest(name, module):
+    actions = getattr(module, "ACTIONS", None)
+    description = getattr(module, "DESCRIPTION", None)
+    return {
+        "name": name,
+        "description": description,
+        "actions": json_safe(actions) if isinstance(actions, dict) else None,
+        "manifest": isinstance(actions, dict) and isinstance(description, str),
+    }
+
+
+def list_adapters(with_manifest=True):
+    items = []
+    for path in sorted(ADAPTER_DIR.glob("*.py")):
+        if path.name.startswith("_"):
+            continue
+        item = {"name": path.stem}
+        if with_manifest:
+            try:
+                item.update(adapter_manifest(path.stem, load_adapter(path.stem)))
+                if item["actions"]:
+                    item["actions"] = sorted(item["actions"])
+            except Exception as e:
+                item.update({"manifest": False, "load_error": f"{type(e).__name__}: {e}"})
+        items.append(item)
+    return items
+
+
+def describe_adapter(name):
+    info = adapter_manifest(name, load_adapter(name))
+    info["usage"] = {"action": "adapter_call", "name": name, "payload": {"action": "<adapter action>"}}
+    return info
 
 
 def call_adapter(a, context):
@@ -120,19 +175,59 @@ def call_adapter(a, context):
     module = load_adapter(name)
     handler = getattr(module, "handle", None)
     if not callable(handler):
-        raise ValueError(f"adapter {name} must define handle(payload, context)")
-    result = handler(a.get("payload") or {}, context)
-    return json_safe(result)
-def object_put(obj, kind):
+        raise ActionError(f"adapter {name} must define handle(payload, context)")
+    payload = a.get("payload") or {}
+    actions = getattr(module, "ACTIONS", None)
+    if isinstance(actions, dict) and payload.get("action") is not None and payload["action"] not in actions:
+        raise ActionError(
+            f"unknown {name} adapter action: {payload['action']}",
+            hint=f"describe {{adapter: '{name}'}}",
+            valid_actions=sorted(actions),
+        )
+    return json_safe(handler(payload, context))
+
+
+def install_adapter(a):
+    name = a.get("name")
+    code = a.get("code")
+    _check_adapter_name(name)
+    if not isinstance(code, str) or not code.strip():
+        raise ActionError("adapter code required")
+    path = ADAPTER_DIR / f"{name}.py"
+    previous = path.read_text(encoding="utf-8") if path.exists() else None
+    path.write_text(code, encoding="utf-8")
+    try:
+        module = load_adapter(name)
+        if not callable(getattr(module, "handle", None)):
+            raise ActionError("adapter must define handle(payload, context)")
+        manifest = adapter_manifest(name, module)
+        if not manifest["manifest"]:
+            raise ActionError(
+                "adapter must define DESCRIPTION (str) and ACTIONS (dict)",
+                hint="ACTIONS = {'status': {'effect': 'read', 'summary': '...', 'params': {}}}",
+            )
+    except Exception:
+        _ADAPTER_CACHE.pop(name, None)
+        if previous is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.write_text(previous, encoding="utf-8")
+        raise
+    return dict(manifest, path=str(path), loaded=True)
+
+
+# --- COM -----------------------------------------------------------------
+
+def object_put(obj, kind, label=None):
     handle = f"{kind}:{uuid.uuid4().hex}"
-    OBJECTS[handle] = obj
+    OBJECTS[handle] = (obj, label)
     return handle
 
 
 def object_get(handle):
     if handle not in OBJECTS:
-        raise KeyError(f"unknown object handle: {handle}")
-    return OBJECTS[handle]
+        raise ActionError(f"unknown object handle: {handle}", hint="see com_list", handles=list(OBJECTS))
+    return OBJECTS[handle][0]
 
 
 def resolve_attr(obj, path):
@@ -147,17 +242,17 @@ def resolve_attr(obj, path):
 def com_create(a):
     progid = a.get("progid")
     if not progid:
-        raise ValueError("progid required")
+        raise ActionError("progid required")
     obj = win32com.client.Dispatch(progid)
-    return {"handle": object_put(obj, "com"), "progid": progid}
+    return {"handle": object_put(obj, "com", progid), "progid": progid}
 
 
 def com_active(a):
     progid = a.get("progid")
     if not progid:
-        raise ValueError("progid required")
+        raise ActionError("progid required")
     obj = win32com.client.GetActiveObject(progid)
-    return {"handle": object_put(obj, "com_active"), "progid": progid}
+    return {"handle": object_put(obj, "com_active", progid), "progid": progid}
 
 
 def com_get(a):
@@ -171,12 +266,10 @@ def com_get(a):
 def com_set(a):
     obj = object_get(a["handle"])
     path = a.get("path")
-    if not path or "." in path:
-        parent_path, _, leaf = path.rpartition(".")
-        parent = resolve_attr(obj, parent_path)
-    else:
-        parent, leaf = obj, path
-    setattr(parent, leaf, a.get("value"))
+    if not path:
+        raise ActionError("path required")
+    parent_path, _, leaf = path.rpartition(".")
+    setattr(resolve_attr(obj, parent_path), leaf, a.get("value"))
     return {"ok": True}
 
 
@@ -185,13 +278,20 @@ def com_call(a):
     fn = resolve_attr(obj, a.get("path", ""))
     result = fn(*(a.get("args") or []), **(a.get("kwargs") or {}))
     if a.get("store_result") and result is not None:
-        return {"handle": object_put(result, "com_result")}
+        return {"handle": object_put(result, "com_result", a.get("path"))}
     return {"value": json_safe(result)}
+
+
+def com_list(a):
+    return {"items": [{"handle": h, "source": label} for h, (_, label) in OBJECTS.items()]}
+
+
 def com_release(a):
     handle = a.get("handle")
-    OBJECTS.pop(handle, None)
-    return {"ok": True}
+    return {"ok": True, "released": OBJECTS.pop(handle, None) is not None}
 
+
+# --- win32 / processes ---------------------------------------------------
 
 def win32_message(a):
     hwnd = int(a["hwnd"])
@@ -341,17 +441,17 @@ def probe_target(a):
     }
 
 
-def capture_window(a, context):
-    hwnd = int(a["hwnd"])
+def grab_window(hwnd, flags=2):
+    """Background capture of one window via PrintWindow.
+
+    Returns (PIL image, rect, rendered). GPU-drawn windows may come back black;
+    callers that need pixels should check `image.getbbox()`.
+    """
     left, top, right, bottom = win32gui.GetWindowRect(hwnd)
     width = int(right - left)
     height = int(bottom - top)
     if width <= 0 or height <= 0:
-        raise ValueError("window has no drawable size")
-
-    artifact_dir = Path(context["artifact_dir"])
-    artifact_dir.mkdir(parents=True, exist_ok=True)
-    output = Path(a.get("path") or artifact_dir / f"window-{hwnd}-{uuid.uuid4().hex[:8]}.png")
+        raise ActionError("window has no drawable size (minimized?)", hint="window {op: 'restore'} first")
 
     hwnd_dc = win32gui.GetWindowDC(hwnd)
     src_dc = win32ui.CreateDCFromHandle(hwnd_dc)
@@ -361,8 +461,7 @@ def capture_window(a, context):
     mem_dc.SelectObject(bitmap)
 
     try:
-        flags = int(a.get("flags", 2))
-        rendered = ctypes.windll.user32.PrintWindow(hwnd, mem_dc.GetSafeHdc(), flags)
+        rendered = ctypes.windll.user32.PrintWindow(hwnd, mem_dc.GetSafeHdc(), int(flags))
         info = bitmap.GetInfo()
         bits = bitmap.GetBitmapBits(True)
         image = Image.frombuffer(
@@ -373,13 +472,24 @@ def capture_window(a, context):
             "BGRX",
             0,
             1,
-        )
-        image.save(output)
+        ).copy()
     finally:
         win32gui.DeleteObject(bitmap.GetHandle())
         mem_dc.DeleteDC()
         src_dc.DeleteDC()
         win32gui.ReleaseDC(hwnd, hwnd_dc)
+    return image, (left, top, right, bottom), bool(rendered)
+
+
+def capture_window(a, context):
+    hwnd = int(a["hwnd"])
+    image, (left, top, right, bottom), rendered = grab_window(hwnd, a.get("flags", 2))
+    width, height = image.size
+
+    artifact_dir = Path(context["artifact_dir"])
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    output = Path(a.get("path") or artifact_dir / f"window-{hwnd}-{uuid.uuid4().hex[:8]}.png")
+    image.save(output)
 
     return {
         "path": str(output),
@@ -391,37 +501,151 @@ def capture_window(a, context):
     }
 
 
-def install_adapter(a):
-    name = a.get("name")
-    code = a.get("code")
-    if not name or not name.replace("_", "").replace("-", "").isalnum():
-        raise ValueError("invalid adapter name")
-    if not isinstance(code, str) or not code.strip():
-        raise ValueError("adapter code required")
-    path = ADAPTER_DIR / f"{name}.py"
-    path.write_text(code, encoding="utf-8")
-    module = load_adapter(name)
-    if not callable(getattr(module, "handle", None)):
-        path.unlink(missing_ok=True)
-        raise ValueError("adapter must define handle(payload, context)")
-    return {"name": name, "path": str(path), "loaded": True}
+# --- look: an image the model can see --------------------------------------
+
+LOOK_MAX_SIDE = 1568      # longest side sent to the model
+LOOK_MIN_SIDE = 200
+
+
+def _grab_screen(bbox=None, monitor=0):
+    import mss  # local: keep core_ext importable without a display stack
+    with mss.mss() as sct:
+        if bbox:
+            left, top, right, bottom = bbox
+            area = {"left": left, "top": top, "width": right - left, "height": bottom - top}
+        else:
+            area = sct.monitors[int(monitor)]
+        shot = sct.grab(area)
+        image = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
+        return image, (area["left"], area["top"], area["left"] + area["width"], area["top"] + area["height"])
+
+
+def _find_hwnd(a, context):
+    if a.get("hwnd") is not None:
+        return int(a["hwnd"])
+    if a.get("window"):
+        wrapper = context["find_uia"]({"window": a["window"]})
+        return int(wrapper.handle)
+    return None
+
+
+LOOK_KEEP_FILES = 50      # saved looks kept in <artifact_dir>/chat
+
+
+def encode_for_model(image, max_side=LOOK_MAX_SIDE, quality=80):
+    """Downscale and JPEG-encode; returns (jpeg bytes, scale, size)."""
+    import io
+    max_side = max(LOOK_MIN_SIDE, min(int(max_side), 4096))
+    scale = min(1.0, max_side / max(image.size))
+    if scale < 1.0:
+        image = image.resize(
+            (max(1, round(image.width * scale)), max(1, round(image.height * scale))),
+            Image.LANCZOS,
+        )
+    buf = io.BytesIO()
+    image.save(buf, format="JPEG", quality=max(30, min(int(quality), 95)), optimize=True)
+    return buf.getvalue(), scale, image.size
+
+
+def save_look(jpeg, artifact_dir):
+    """Write a look to <artifact_dir>/chat and keep only the newest files there."""
+    import time
+    chat_dir = Path(artifact_dir) / "chat"
+    chat_dir.mkdir(parents=True, exist_ok=True)
+    path = chat_dir / f"look-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}.jpg"
+    path.write_bytes(jpeg)
+    old = sorted(chat_dir.glob("look-*.jpg"), key=lambda p: p.stat().st_mtime, reverse=True)
+    for stale in old[LOOK_KEEP_FILES:]:
+        stale.unlink(missing_ok=True)
+    return path
+
+
+def look(a, context):
+    """Capture a window, region or monitor and return it as an image for the model."""
+    hwnd = _find_hwnd(a, context)
+    source = "screen"
+    note = None
+    if hwnd is not None:
+        image, rect, rendered = grab_window(hwnd)
+        source = "window"
+        # PrintWindow returns black for many GPU/DirectX surfaces; fall back to
+        # the visible screen pixels of the same rectangle.
+        if not rendered or image.convert("L").getextrema()[1] < 8:
+            if win32gui.IsIconic(hwnd):
+                raise ActionError("window is minimized and cannot be captured",
+                                  hint="window {op: 'restore'} first")
+            image, rect = _grab_screen(rect)
+            source = "screen_region"
+            note = "background capture was blank (GPU surface); used visible screen pixels, overlapping windows may show"
+        title = win32gui.GetWindowText(hwnd)
+    elif a.get("region"):
+        r = a["region"]
+        left, top = int(r["left"]), int(r["top"])
+        image, rect = _grab_screen((left, top, left + int(r["width"]), top + int(r["height"])))
+        title = None
+    else:
+        image, rect = _grab_screen(monitor=a.get("monitor", 0))
+        title = None
+
+    jpeg, scale, size = encode_for_model(image, a.get("max_side", LOOK_MAX_SIDE), a.get("quality", 80))
+    result = {}
+    if a.get("save"):
+        # For clients that reach the agent through a terminal (e.g. ChatGPT via
+        # Remote Desktop Commander): no base64 in stdout, the client opens the file.
+        path = save_look(jpeg, context["artifact_dir"])
+        result["path"] = str(path)
+        result["bytes"] = len(jpeg)
+    else:
+        import base64
+        result["image"] = {"mime_type": "image/jpeg", "data": base64.b64encode(jpeg).decode("ascii")}
+    result.update({
+        "source": source,
+        "title": title,
+        "hwnd": hwnd,
+        "screen_rect": {"left": rect[0], "top": rect[1], "right": rect[2], "bottom": rect[3]},
+        "image_size": {"width": size[0], "height": size[1]},
+        "scale": round(scale, 6),
+        "to_screen": "screen_x = left + image_x / scale; screen_y = top + image_y / scale",
+    })
+    if note:
+        result["note"] = note
+    return result
+
+
+# --- file handoff --------------------------------------------------------
+
+def is_protected(path):
+    path = Path(path).resolve()
+    if path.suffix.lower() in PROTECTED_SUFFIXES:
+        return True
+    for root in PROTECTED_DIRS:
+        try:
+            path.relative_to(Path(root).resolve())
+            return True
+        except ValueError:
+            continue
+    return False
 
 
 def stage_file(a):
     raw_path = a.get("path")
     if not raw_path:
-        raise ValueError("path is required")
+        raise ActionError("path is required")
 
     source = Path(raw_path).expanduser().resolve()
     if not source.exists() or not source.is_file():
         raise FileNotFoundError(str(source))
+    if is_protected(source):
+        raise PermissionError(
+            "refusing to hand off credentials: tokens, device identity and browser profile never leave this PC"
+        )
 
     size = source.stat().st_size
     max_bytes = int(a.get("max_bytes", 25 * 1024 * 1024))
     if max_bytes <= 0:
-        raise ValueError("max_bytes must be positive")
+        raise ActionError("max_bytes must be positive")
     if size > max_bytes:
-        raise ValueError(
+        raise ActionError(
             "file is too large for chat handoff: %d bytes > %d bytes"
             % (size, max_bytes)
         )
@@ -454,59 +678,26 @@ def stage_file(a):
     }
 
 
-CAPABILITIES = {
-    "routing": [
-        "native/api/adapter",
-        "browser/playwright",
-        "com/ipc/cli",
-        "uia semantic",
-        "win32 messages",
-        "background capture",
-        "physical input only when explicitly allowed",
-    ],
-    "generic_actions": [
-        "exec", "python", "powershell",
-        "adapter_list", "adapter_install", "adapter_call",
-        "com_create", "com_active", "com_get", "com_set", "com_call", "com_release",
-        "win32_message", "window_capture", "discover_process", "probe_target",
-        "file_handoff",
-    ],
-}
-def handle(action, a, context):
-    if action == "capabilities":
-        return CAPABILITIES
-    if action == "exec":
-        return run_command(a)
-    if action == "python":
-        return run_python(a)
-    if action == "powershell":
-        return run_powershell(a)
-    if action == "adapter_list":
-        return {"items": list_adapters()}
-    if action == "adapter_install":
-        return install_adapter(a)
-    if action == "adapter_call":
-        return call_adapter(a, context)
-    if action == "com_create":
-        return com_create(a)
-    if action == "com_active":
-        return com_active(a)
-    if action == "com_get":
-        return com_get(a)
-    if action == "com_set":
-        return com_set(a)
-    if action == "com_call":
-        return com_call(a)
-    if action == "com_release":
-        return com_release(a)
-    if action == "win32_message":
-        return win32_message(a)
-    if action == "window_capture":
-        return capture_window(a, context)
-    if action == "discover_process":
-        return discover_process(a)
-    if action == "probe_target":
-        return probe_target(a)
-    if action == "file_handoff":
-        return stage_file(a)
-    return None
+def handlers(context):
+    """Actions implemented in this module, keyed by catalog name."""
+    return {
+        "exec": run_command,
+        "python": run_python,
+        "powershell": run_powershell,
+        "adapter_list": lambda a: {"items": list_adapters()},
+        "adapter_install": install_adapter,
+        "adapter_call": lambda a: call_adapter(a, context),
+        "com_create": com_create,
+        "com_active": com_active,
+        "com_get": com_get,
+        "com_set": com_set,
+        "com_call": com_call,
+        "com_list": com_list,
+        "com_release": com_release,
+        "win32_message": win32_message,
+        "window_capture": lambda a: capture_window(a, context),
+        "look": lambda a: look(a, context),
+        "discover_process": discover_process,
+        "probe_target": probe_target,
+        "file_handoff": stage_file,
+    }

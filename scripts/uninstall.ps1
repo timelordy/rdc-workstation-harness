@@ -29,6 +29,13 @@ foreach ($name in $TaskNames) {
     }
 }
 
+$ToolsDir = Join-Path $InstallRoot "tools"
+$UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
+if ($UserPath) {
+    $kept = @($UserPath -split ";" | Where-Object { $_ -and $_ -ne $ToolsDir })
+    [Environment]::SetEnvironmentVariable("Path", ($kept -join ";"), "User")
+}
+
 Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
     Where-Object { $_.CommandLine -and $_.CommandLine -like "*$InstallRoot*" } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
