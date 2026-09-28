@@ -101,6 +101,20 @@ async function activePage() {
   return page;
 }
 
+// Actions that cannot change cookies/storage: skip the costly state snapshot.
+const READ_ONLY = new Set([
+  'status', 'snapshot', 'text', 'html', 'url', 'screenshot', 'tabs', 'console', 'errors', 'wait',
+]);
+
+async function run(action) {
+  const result = await handle(action);
+  const mutates = !READ_ONLY.has(action?.action)
+    && !(action?.action === 'cookies' && !action.clear)
+    && !(action?.action === 'storage' && !action.clear && !action.set);
+  if (context && mutates) await saveState();
+  return result;
+}
+
 function locatorFor(p, a) {
   if (a.selector) return p.locator(a.selector).first();
   if (a.role) return p.getByRole(a.role, { name: a.name, exact: !!a.exact }).first();
@@ -130,7 +144,7 @@ async function handle(a) {
     browser = null;
     context = null;
     page = null;
-    headed = !!a.headed;
+    if (typeof a.headed === 'boolean') headed = a.headed;
     await launch();
     return { ok: true, headed, stateFile: STATE_FILE };
   }
@@ -349,8 +363,7 @@ const server = http.createServer((req, res) => {
     if (rejected) return;
     try {
       const action = JSON.parse(body || '{}');
-      const result = await handle(action);
-      if (context) await saveState();
+      const result = await run(action);
       res.end(JSON.stringify({ ok: true, ...result }));
     } catch (error) {
       res.statusCode = 500;
@@ -380,8 +393,7 @@ rl.on('line', async line => {
   if (!raw) return;
   try {
     const action = JSON.parse(raw);
-    const result = await handle(action);
-    if (context) await saveState();
+    const result = await run(action);
     out({ ok: true, ...result });
   } catch (error) {
     out({

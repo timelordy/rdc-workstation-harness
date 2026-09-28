@@ -2,6 +2,35 @@
 
 All notable changes are documented here.
 
+## [0.2.0] - 2026-09-28
+
+### Added
+
+- Action catalog (`catalog.py`): one description of every action drives the dispatcher, `capabilities` and the new `describe` action. `capabilities` now lists all ~50 actions (previously 17), browser actions and adapters.
+- MCP tool `desktop_describe` and routing guidance in the MCP tool descriptions.
+- MCP tool `desktop_look` / action `look`: the model sees a window, region or monitor as an image (downscaled JPEG) with a pixel-to-screen mapping. Windows are captured in the background; blank GPU captures fall back to visible screen pixels.
+- `pc-agent` terminal CLI (installed on the user PATH) for ChatGPT via Remote Desktop Commander. `pc-agent look` saves the JPEG under `Downloads\rdc-harness\chat` (last 50 kept) and prints the path for `read_file`; base64 never reaches the terminal. See `docs/CHATGPT_RU.md`.
+- Adapter manifest contract (`DESCRIPTION`, `ACTIONS`); `adapter_list` shows what each adapter does; `adapter_call` rejects unknown adapter actions with the valid list.
+- Structured errors with `hint`, `did_you_mean`, `valid_actions` or `params`; HTTP 400/403/500 separate request errors, missing permission and target failures.
+- `com_list` action; `com_release` reports whether a handle existed.
+- Behaviour tests that run a real agent on a free port; catalog/bridge consistency tests; pyflakes in CI.
+
+### Fixed
+
+- `probe_target` always returned an empty `windows` list (missing `win32process` import was swallowed).
+- `com_set` without `path` crashed with `AttributeError`.
+- MCP proxy cut off long `exec`/`python`/`powershell`/browser calls after 135 s while they kept running; it now waits for the action's own timeout.
+- Browser `restart` without `headed` silently switched to headless.
+- Adapters were re-imported as new modules on every change and never released; they are now cached by mtime.
+- Bridge errors reached the model as a bare `HTTP Error 500`; the bridge's message is now forwarded.
+
+### Security
+
+- The browser side-effect gate is enforced by the agent for every channel (MCP, CLI, HTTP) and also covers `Enter` presses; `rdc_web.py` shares the same rules. Previously MCP bypassed it.
+- `file_handoff` refuses tokens, device identity and browser-profile files.
+- Browser storage state is written only after actions that can change it.
+- `adapter_install` rolls back to the previous file if the new adapter fails to load.
+
 ## [0.1.1] - 2026-09-27
 
 ### Removed

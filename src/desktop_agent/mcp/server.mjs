@@ -16,6 +16,20 @@ function token() {
   return fs.readFileSync(TOKEN_FILE, 'utf8').trim();
 }
 
+const DEFAULT_TIMEOUT_MS = 135000;
+const MAX_TIMEOUT_MS = 3600 * 1000 + 15000;
+
+// Long-running actions carry their own timeout; the proxy must wait at least
+// that long, otherwise the model sees a timeout while the work continues.
+// Desktop actions use seconds, browser payloads use milliseconds.
+function timeoutFor(payload) {
+  const isBrowser = payload?.action === 'browser';
+  const raw = Number(isBrowser ? payload?.payload?.timeout : payload?.timeout);
+  if (!Number.isFinite(raw) || raw <= 0) return DEFAULT_TIMEOUT_MS;
+  const ms = isBrowser ? raw : raw * 1000;
+  return Math.min(Math.max(DEFAULT_TIMEOUT_MS, ms + 15000), MAX_TIMEOUT_MS);
+}
+
 function request(method, route, payload = null, authenticated = false) {
   return new Promise((resolve, reject) => {
     const body = payload == null ? null : Buffer.from(JSON.stringify(payload), 'utf8');
@@ -32,7 +46,7 @@ function request(method, route, payload = null, authenticated = false) {
       path: route,
       method,
       headers,
-      timeout: 135000,
+      timeout: timeoutFor(payload),
     }, res => {
       const chunks = [];
       res.on('data', chunk => chunks.push(chunk));
@@ -65,9 +79,31 @@ function toolResult(value, isError = false) {
   };
 }
 
+// A `look` result carries base64 image data: send it as an MCP image block
+// and keep only the metadata as text, so the model sees pixels, not base64.
+function withImage(response) {
+  const image = response?.result?.image;
+  if (!image?.data) return toolResult(response);
+  const { image: _omit, ...meta } = response.result;
+  return {
+    content: [
+      { type: 'image', data: image.data, mimeType: image.mime_type || 'image/jpeg' },
+      { type: 'text', text: JSON.stringify({ ok: true, ...meta }, null, 2) },
+    ],
+  };
+}
+
+async function callAction(payload) {
+  try {
+    return withImage(await request('POST', '/action', payload, true));
+  } catch (error) {
+    return toolResult(error.response || { ok: false, error: String(error.message || error) }, true);
+  }
+}
+
 const server = new McpServer({
   name: 'desktop-agent',
-  version: '1.0.0',
+  version: '1.2.0',
 });
 
 server.registerTool(
@@ -90,34 +126,67 @@ server.registerTool(
   'desktop_capabilities',
   {
     title: 'Desktop Agent Capabilities',
-    description: 'List the generic background-first capabilities currently exposed by the local desktop agent.',
+    description: 'Start here. Lists every action of the local Windows desktop agent grouped by area '
+      + '(uia, com, process, browser, adapter, physical, ...) with its effect (read/write/exec/physical), '
+      + 'all browser actions, installed app adapters and the recommended routing order.',
     inputSchema: z.object({}),
   },
-  async () => {
-    try {
-      return toolResult(await request('POST', '/action', { action: 'capabilities' }, true));
-    } catch (error) {
-      return toolResult(error.response || { ok: false, error: String(error.message || error) }, true);
-    }
-  }
+  async () => callAction({ action: 'capabilities' })
+);
+
+server.registerTool(
+  'desktop_describe',
+  {
+    title: 'Describe Desktop Agent Action',
+    description: 'Exact parameters, required fields and an example for one desktop action, one browser '
+      + 'action or one app adapter (including the adapter\'s own actions). Use before an unfamiliar call.',
+    inputSchema: z.object({
+      name: z.string().optional().describe('Desktop action name, e.g. uia_click, com_call.'),
+      browser: z.string().optional().describe('Browser action name, e.g. click, snapshot.'),
+      adapter: z.string().optional().describe('Adapter name from capabilities, e.g. autocad.'),
+    }),
+  },
+  async (args) => callAction({ action: 'describe', ...args })
+);
+
+server.registerTool(
+  'desktop_look',
+  {
+    title: 'Look At Screen',
+    description: 'See a window, a screen region or a monitor as an image. Use it when UIA or the DOM '
+      + 'do not explain what is on screen (custom/GPU UIs, dialogs, drawings, visual check after an action). '
+      + 'Target one window when possible: it is captured in the background without focusing it. '
+      + 'The text part maps image pixels back to screen coordinates.',
+    inputSchema: z.object({
+      window: z.record(z.string(), z.any()).optional()
+        .describe('UIA window selector, e.g. {"title_re": "AutoCAD"}. Omit for the whole screen.'),
+      hwnd: z.number().int().optional().describe('Window handle, alternative to window.'),
+      region: z.object({
+        left: z.number().int(), top: z.number().int(),
+        width: z.number().int().positive(), height: z.number().int().positive(),
+      }).optional().describe('Screen rectangle in pixels.'),
+      monitor: z.number().int().min(0).optional().describe('Monitor index, 0 = all monitors (default).'),
+      max_side: z.number().int().min(200).max(4096).optional()
+        .describe('Longest image side in pixels, default 1568. Lower = cheaper, higher = more detail.'),
+    }),
+  },
+  async (args) => callAction({ action: 'look', ...args })
 );
 
 server.registerTool(
   'desktop_action',
   {
     title: 'Desktop Agent Action',
-    description: 'Execute one structured local desktop-agent request. Prefer native APIs, adapters, COM, Playwright, UIA and Win32 before physical input.',
+    description: 'Execute one desktop-agent request: {"action": "<name>", ...params}. '
+      + 'Get names from desktop_capabilities and parameters from desktop_describe. '
+      + 'Routing: app adapter (adapter_call) > browser DOM / COM > UIA > Win32 > physical input '
+      + '(needs allow_physical=true). Externally visible browser clicks (send/pay/delete) need '
+      + 'commit=true and prior user confirmation. Errors return a hint and valid alternatives.',
     inputSchema: z.object({
-      request: z.record(z.string(), z.any()).describe('Complete desktop-agent request object, including its action field.'),
+      request: z.record(z.string(), z.any()).describe('Request object with an action field, e.g. {"action":"windows","title_re":"Excel"}.'),
     }),
   },
-  async ({ request: actionRequest }) => {
-    try {
-      return toolResult(await request('POST', '/action', actionRequest, true));
-    } catch (error) {
-      return toolResult(error.response || { ok: false, error: String(error.message || error) }, true);
-    }
-  }
+  async ({ request: actionRequest }) => callAction(actionRequest)
 );
 
 

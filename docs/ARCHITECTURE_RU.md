@@ -48,6 +48,29 @@ watchdog/диагностике.
 Сервер использует `ThreadingHTTPServer`, но состояние COM и объектов остаётся
 процессным. Адаптер должен сам учитывать потоковую модель целевого API.
 
+## Каталог действий и самоописание
+
+`src/desktop_agent/catalog.py` — единственное описание всех действий: группа,
+эффект (`read` / `write` / `exec` / `physical`), параметры, обязательные поля и
+пример. Из него же строятся диспетчер, `capabilities` и `describe`, поэтому
+модель видит ровно то, что агент умеет. Тест `test_catalog.py` падает, если
+обработчик добавлен без описания или наоборот, а также если список browser
+actions разошёлся с `bridge.js`.
+
+Типичный путь модели:
+
+```text
+desktop_capabilities            -> все группы, browser actions, адаптеры
+desktop_describe {adapter}      -> что умеет адаптер и что он меняет
+desktop_describe {name}         -> параметры действия и пример
+desktop_action {...}            -> вызов
+```
+
+Ошибки возвращаются структурно: `error`, `type`, `hint` и по возможности
+`did_you_mean`, `valid_actions` или `params`. Статусы: 400 — ошибка запроса,
+403 — нужно явное разрешение (`allow_physical`, `commit`, защищённый файл),
+500 — сбой целевого приложения.
+
 ## Browser Bridge
 
 `src/browser_bridge/bridge.js` запускает persistent Playwright context. Он
@@ -83,6 +106,25 @@ none ----------------> visual/physical fallback
 
 В репозитории есть AutoCAD COM adapter. Новые интеграции должны
 использовать публичный интерфейс приложения и иметь понятную границу side effects.
+
+Контракт адаптера — модуль с тремя именами:
+
+```python
+DESCRIPTION = "Что за приложение и как адаптер к нему подключается."
+ACTIONS = {
+    "status": {"effect": "read", "summary": "...", "params": {}},
+    "export": {"effect": "write", "summary": "...", "params": {"path": "..."}},
+}
+
+def handle(payload, context):
+    ...
+```
+
+`adapter_list` и `describe {adapter}` показывают `DESCRIPTION` и `ACTIONS`,
+`adapter_call` отклоняет неизвестное действие со списком допустимых, а
+`adapter_install` не принимает модуль без манифеста и возвращает предыдущую
+версию файла, если новая не загрузилась. Модули кешируются по mtime и
+перезагружаются только после изменения файла.
 
 ## Жизненный цикл процессов
 

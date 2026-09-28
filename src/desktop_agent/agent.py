@@ -1,15 +1,13 @@
 import ctypes
-import importlib.util
 import json
 import os
 import re
 import secrets
 import subprocess
-import sys
 import time
+import urllib.error
 import urllib.request
-import uuid
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 from pathlib import Path
 
 import mss
@@ -17,13 +15,14 @@ import mss.tools
 import psutil
 import pyautogui
 import pyperclip
-import win32api
-import win32con
 import win32gui
 import win32process
 import win32com.client
+import catalog
 import core_ext
+from core_ext import ActionError
 from pywinauto import Desktop
+from pywinauto.findwindows import ElementNotFoundError
 from pywinauto.keyboard import send_keys
 
 HOST = "127.0.0.1"  # Deliberately not configurable: never expose this service directly.
@@ -47,7 +46,12 @@ else:
 pyautogui.FAILSAFE = True
 pyautogui.PAUSE = 0.05
 PHYSICAL_INPUT_DEFAULT = False
-OBJECTS = {}
+BROWSER_AUDIT_LOG = Path(os.getenv(
+    "RDC_HARNESS_AUDIT_LOG",
+    str(HOME / ".rdc-workstation-harness" / "logs" / "browser-actions.ndjson"),
+))
+
+
 def rect_dict(rect):
     return {
         "left": rect.left,
@@ -115,22 +119,33 @@ def selector_kwargs(a):
         out["found_index"] = int(a["index"])
     return out
 def find_uia(a):
+    try:
+        return _find_uia(a)
+    except ElementNotFoundError:
+        raise ActionError(
+            "no window/control matches the selector",
+            hint="list candidates with windows {title_re} or uia_find, then retry",
+            selector={k: a[k] for k in ("window", "control") if a.get(k)} or selector_kwargs(a),
+        ) from None
+
+
+def _find_uia(a):
     desktop = Desktop(backend="uia")
     if a.get("window"):
         window_criteria = selector_kwargs(a["window"])
         if not window_criteria:
-            raise ValueError("window selector required")
+            raise ActionError("window selector required", hint=catalog.SELECTOR)
         spec = desktop.window(**window_criteria)
         if a.get("control"):
             control_criteria = selector_kwargs(a["control"])
             if not control_criteria:
-                raise ValueError("control selector required")
+                raise ActionError("control selector required", hint=catalog.SELECTOR)
             spec = spec.child_window(**control_criteria)
         return spec.wrapper_object()
 
     criteria = selector_kwargs(a)
     if not criteria:
-        raise ValueError("UIA selector required")
+        raise ActionError("UIA selector required", hint="pass window={title_re:...} or top-level selector fields")
     return desktop.window(**criteria).wrapper_object()
 
 
@@ -171,8 +186,58 @@ def forward_browser(payload):
         headers=headers,
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=60) as response:
-        return json.loads(response.read().decode("utf-8"))
+    # Browser timeouts are in ms; wait a bit longer than the bridge itself.
+    try:
+        wait = max(60.0, float(payload.get("timeout") or 0) / 1000 + 15)
+    except (TypeError, ValueError):
+        wait = 60.0
+    try:
+        with urllib.request.urlopen(req, timeout=wait) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        # The bridge reports its own errors as JSON with a 4xx/5xx status.
+        try:
+            body = json.loads(e.read().decode("utf-8"))
+        except Exception:
+            raise e
+        raise ActionError(
+            "browser: " + str(body.get("error") or e),
+            hint="describe {browser: '<action>'} for parameters",
+        ) from None
+
+
+def audit_browser(event):
+    try:
+        BROWSER_AUDIT_LOG.parent.mkdir(parents=True, exist_ok=True)
+        event["ts"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        with BROWSER_AUDIT_LOG.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(event, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
+def do_browser(a):
+    payload = dict(a.get("payload") or {})
+    if "action" not in payload:
+        payload["action"] = a.get("browser_action")
+    if payload.get("action") not in catalog.BROWSER_ACTIONS:
+        raise ActionError(
+            f"unknown browser action: {payload.get('action')}",
+            hint="describe {browser: '<action>'}",
+            did_you_mean=catalog.suggest(payload.get("action"), catalog.BROWSER_ACTIONS),
+            valid_actions=sorted(catalog.BROWSER_ACTIONS),
+        )
+    side_effect = catalog.browser_side_effect(payload)
+    if side_effect and not a.get("commit"):
+        audit_browser({"status": "blocked", "side_effect": True, "payload": payload})
+        raise PermissionError(
+            "externally visible browser action blocked (send/pay/delete/...). "
+            "Ask the user to confirm, then repeat with commit=true."
+        )
+    result = forward_browser(payload)
+    if side_effect:
+        audit_browser({"status": "executed", "side_effect": True, "payload": payload})
+    return result
 
 
 def list_windows(a):
@@ -285,7 +350,7 @@ def do_window_op(a):
     elif op == "close":
         ctrl.close()
     else:
-        raise ValueError(f"Unknown window op: {op}")
+        raise ActionError(f"Unknown window op: {op}", hint="focus | minimize | maximize | restore | close")
     return {"op": op, "control": window_info(ctrl)}
 def require_physical(a):
     if not bool(a.get("allow_physical", PHYSICAL_INPUT_DEFAULT)):
@@ -299,10 +364,10 @@ def uia_call(a):
     ctrl = find_uia(a)
     method_name = a.get("method")
     if not method_name or method_name.startswith("_"):
-        raise ValueError("public method required")
+        raise ActionError("public method required")
     method = getattr(ctrl, method_name, None)
     if not callable(method):
-        raise AttributeError(f"UIA control has no callable method: {method_name}")
+        raise ActionError(f"UIA control has no callable method: {method_name}")
     result = method(*(a.get("args") or []), **(a.get("kwargs") or {}))
     return {
         "method": method_name,
@@ -311,283 +376,349 @@ def uia_call(a):
     }
 
 
-def handle(a):
-    action = a.get("action")
-    if not action:
-        raise ValueError("Missing action")
+def selftest(a):
+    checks = {}
 
-    ext_context = {
+    try:
+        browser_check = forward_browser({"action": "status"})
+        checks["browser"] = {
+            "ok": bool(browser_check.get("ok", False)),
+            "running": browser_check.get("running"),
+            "pages": browser_check.get("pages"),
+        }
+    except Exception as e:
+        checks["browser"] = {"ok": False, "error": str(e)}
+
+    try:
+        windows = list_windows({"limit": 20})
+        checks["uia"] = {
+            "ok": True,
+            "window_count_sample": len(windows),
+        }
+    except Exception as e:
+        checks["uia"] = {"ok": False, "error": str(e)}
+
+    try:
+        d = win32com.client.Dispatch("Scripting.Dictionary")
+        d.Add("desktop_agent", 1)
+        checks["com"] = {"ok": d.Count == 1}
+    except Exception as e:
+        checks["com"] = {"ok": False, "error": str(e)}
+
+    try:
+        adapters = core_ext.list_adapters()
+        failed = [item["name"] for item in adapters if item.get("load_error")]
+        checks["adapters"] = {
+            "ok": not failed,
+            "names": [item["name"] for item in adapters],
+            "load_errors": failed,
+            # Informational: these still work, they just don't describe themselves.
+            "without_manifest": [item["name"] for item in adapters
+                                 if not item.get("manifest") and not item.get("load_error")],
+        }
+    except Exception as e:
+        checks["adapters"] = {"ok": False, "error": str(e)}
+
+    try:
+        source = ARTIFACT_DIR / "selftest-file-handoff.txt"
+        source.write_text("desktop-agent file handoff selftest\n", encoding="utf-8")
+        staged = core_ext.stage_file({
+            "path": str(source),
+            "name": "selftest-file-handoff.txt",
+            "max_bytes": 1024 * 1024,
+        })
+        staged_path = Path(staged["path"])
+        ok = (
+            staged_path.exists()
+            and staged_path.read_text(encoding="utf-8")
+            == "desktop-agent file handoff selftest\n"
+            and staged.get("mime_type") == "text/plain"
+        )
+        checks["file_handoff"] = {
+            "ok": ok,
+            "mime_type": staged.get("mime_type"),
+            "size": staged.get("size"),
+        }
+        source.unlink(missing_ok=True)
+        staged_path.unlink(missing_ok=True)
+    except Exception as e:
+        checks["file_handoff"] = {"ok": False, "error": str(e)}
+
+    checks["security"] = {
+        "ok": TOKEN_PATH.exists() and BROWSER_TOKEN_PATH.exists() and core_ext.is_protected(TOKEN_PATH),
+        "desktop_token": TOKEN_PATH.exists(),
+        "browser_token": BROWSER_TOKEN_PATH.exists(),
+        "tokens_blocked_from_handoff": core_ext.is_protected(TOKEN_PATH),
+        "localhost_only": HOST == "127.0.0.1",
+    }
+    checks["physical_input"] = {
+        "ok": PHYSICAL_INPUT_DEFAULT is False,
+        "enabled_by_default": PHYSICAL_INPUT_DEFAULT,
+    }
+
+    overall = all(bool(v.get("ok")) for v in checks.values())
+    return {"ok": overall, "checks": checks}
+
+
+def status(a):
+    try:
+        browser = forward_browser({"action": "status"})
+    except Exception as e:
+        browser = {"ok": False, "error": str(e)}
+    return {
+        "ready": True,
+        "pid": os.getpid(),
+        "port": PORT,
+        "admin": bool(ctypes.windll.shell32.IsUserAnAdmin()),
+        "screen": list(pyautogui.size()),
+        "cursor": list(pyautogui.position()),
+        "active_window": active_window_info(),
+        "browser": browser,
+    }
+
+
+def screen_info(a):
+    with mss.mss() as sct:
+        return {
+            "monitors": [dict(m) for m in sct.monitors],
+            "size": list(pyautogui.size()),
+        }
+
+
+def cursor(a):
+    pos = pyautogui.position()
+    return {"x": pos.x, "y": pos.y}
+
+
+def uia_wait(a):
+    ctrl = find_uia(a)
+    state = a.get("state", "exists enabled visible ready")
+    ctrl.wait(state, timeout=float(a.get("timeout", 10)))
+    return {"ok": True, "control": window_info(ctrl)}
+
+
+def uia_find(a):
+    root_args = {"window": a.get("window")} if a.get("window") else a
+    root = find_uia(root_args)
+    criteria = selector_kwargs(a.get("control") or {})
+    if not criteria:
+        raise ActionError("control selector required")
+    criteria.pop("found_index", None)
+    limit = max(1, min(int(a.get("limit", 50)), 300))
+    matches = root.descendants(**criteria)
+    return {
+        "items": [window_info(x) for x in matches[:limit]],
+        "count": len(matches),
+        "truncated": len(matches) > limit,
+    }
+
+
+def physical_move(a):
+    pyautogui.moveTo(int(a["x"]), int(a["y"]), duration=float(a.get("duration", 0.15)))
+    return {"ok": True, "cursor": list(pyautogui.position())}
+
+
+def physical_click(a):
+    pyautogui.click(
+        x=int(a["x"]), y=int(a["y"]),
+        clicks=int(a.get("clicks", 1)),
+        interval=float(a.get("interval", 0.1)),
+        button=a.get("button", "left"),
+    )
+    return {"ok": True}
+
+
+def physical_drag(a):
+    pyautogui.moveTo(int(a["from_x"]), int(a["from_y"]))
+    pyautogui.dragTo(
+        int(a["to_x"]), int(a["to_y"]),
+        duration=float(a.get("duration", 0.5)),
+        button=a.get("button", "left"),
+    )
+    return {"ok": True}
+
+
+def physical_scroll(a):
+    pyautogui.scroll(int(a.get("clicks", 0)), x=a.get("x"), y=a.get("y"))
+    return {"ok": True}
+
+
+def physical_key(a):
+    pyautogui.press(a["key"], presses=int(a.get("presses", 1)), interval=float(a.get("interval", 0.05)))
+    return {"ok": True}
+
+
+def physical_hotkey(a):
+    pyautogui.hotkey(*a["keys"], interval=float(a.get("interval", 0.05)))
+    return {"ok": True}
+
+
+def physical_type_text(a):
+    text = str(a.get("text", ""))
+    mode = a.get("mode", "clipboard")
+    if mode == "keys":
+        pyautogui.write(text, interval=float(a.get("interval", 0.02)))
+    else:
+        pyperclip.copy(text)
+        pyautogui.hotkey("ctrl", "v")
+    return {"ok": True, "chars": len(text), "mode": mode}
+
+
+def clipboard(a):
+    if "set" in a:
+        pyperclip.copy(str(a["set"]))
+        return {"ok": True}
+    return {"text": pyperclip.paste()}
+
+
+def launch(a):
+    args = [str(x) for x in (a.get("args") or [])]
+    proc = subprocess.Popen([str(a["executable"]), *args], cwd=a.get("cwd") or None)
+    return {"pid": proc.pid}
+
+
+def processes(a):
+    name_re = a.get("name_re")
+    limit = max(1, min(int(a.get("limit", 200)), 1000))
+    items = []
+    for proc in psutil.process_iter(["pid", "name", "exe"]):
+        try:
+            info = proc.info
+            if name_re and not re.search(name_re, info.get("name") or "", re.I):
+                continue
+            items.append(info)
+        except Exception:
+            continue
+        if len(items) >= limit:
+            break
+    return {"items": items}
+
+
+def sleep(a):
+    time.sleep(min(float(a.get("seconds", 1)), 60))
+    return {"ok": True}
+
+
+def adapter_names():
+    try:
+        return [item["name"] for item in core_ext.list_adapters(with_manifest=False)]
+    except Exception:
+        return []
+
+
+def capabilities(a):
+    return catalog.capabilities(adapter_names())
+
+
+def describe(a):
+    if a.get("browser"):
+        name = a["browser"]
+        if name not in catalog.BROWSER_ACTIONS:
+            raise ActionError(f"unknown browser action: {name}",
+                              did_you_mean=catalog.suggest(name, catalog.BROWSER_ACTIONS))
+        return catalog.describe_browser(name)
+    if a.get("adapter"):
+        return core_ext.describe_adapter(a["adapter"])
+    name = a.get("name")
+    if name in catalog.ACTIONS:
+        return catalog.describe_action(name)
+    if name in adapter_names():
+        return core_ext.describe_adapter(name)
+    raise ActionError(
+        f"nothing to describe: {name}",
+        hint="pass name=<action>, browser=<browser action> or adapter=<adapter>",
+        did_you_mean=catalog.suggest(name, list(catalog.ACTIONS) + adapter_names()),
+    )
+
+
+def build_handlers():
+    context = {
         "find_uia": find_uia,
         "window_info": window_info,
         "forward_browser": forward_browser,
         "artifact_dir": str(ARTIFACT_DIR),
         "physical_input_default": PHYSICAL_INPUT_DEFAULT,
     }
-    ext_result = core_ext.handle(action, a, ext_context)
-    if ext_result is not None:
-        return ext_result
+    table = {
+        "capabilities": capabilities,
+        "describe": describe,
+        "selftest": selftest,
+        "status": status,
+        "windows": lambda a: {"items": list_windows(a)},
+        "active_window": lambda a: active_window_info(),
+        "uia_info": lambda a: window_info(find_uia(a)),
+        "uia_tree": uia_tree,
+        "uia_find": uia_find,
+        "uia_wait": uia_wait,
+        "uia_click": do_uia_click,
+        "uia_set_text": do_uia_set_text,
+        "uia_call": uia_call,
+        "uia_type_input": do_uia_type_input,
+        "window": do_window_op,
+        "screen_info": screen_info,
+        "screenshot": save_screenshot,
+        "cursor": cursor,
+        "clipboard": clipboard,
+        "move": physical_move,
+        "click": physical_click,
+        "drag": physical_drag,
+        "scroll": physical_scroll,
+        "key": physical_key,
+        "hotkey": physical_hotkey,
+        "type_text": physical_type_text,
+        "processes": processes,
+        "launch": launch,
+        "sleep": sleep,
+        "browser": do_browser,
+    }
+    table.update(core_ext.handlers(context))
+    return table
 
-    if action == "selftest":
-        checks = {}
 
-        try:
-            browser_check = forward_browser({"action": "status"})
-            checks["browser"] = {
-                "ok": bool(browser_check.get("ok", False)),
-                "running": browser_check.get("running"),
-                "pages": browser_check.get("pages"),
-            }
-        except Exception as e:
-            checks["browser"] = {"ok": False, "error": str(e)}
+HANDLERS = build_handlers()
 
-        try:
-            windows = list_windows({"limit": 20})
-            checks["uia"] = {
-                "ok": True,
-                "window_count_sample": len(windows),
-            }
-        except Exception as e:
-            checks["uia"] = {"ok": False, "error": str(e)}
 
-        try:
-            d = win32com.client.Dispatch("Scripting.Dictionary")
-            d.Add("desktop_agent", 1)
-            checks["com"] = {"ok": d.Count == 1}
-        except Exception as e:
-            checks["com"] = {"ok": False, "error": str(e)}
-
-        try:
-            adapters = core_ext.list_adapters()
-            checks["adapters"] = {
-                "ok": True,
-                "names": [item["name"] for item in adapters],
-            }
-        except Exception as e:
-            checks["adapters"] = {"ok": False, "error": str(e)}
-
-        try:
-            source = ARTIFACT_DIR / "selftest-file-handoff.txt"
-            source.write_text("desktop-agent file handoff selftest\n", encoding="utf-8")
-            staged = core_ext.stage_file({
-                "path": str(source),
-                "name": "selftest-file-handoff.txt",
-                "max_bytes": 1024 * 1024,
-            })
-            staged_path = Path(staged["path"])
-            ok = (
-                staged_path.exists()
-                and staged_path.read_text(encoding="utf-8")
-                == "desktop-agent file handoff selftest\n"
-                and staged.get("mime_type") == "text/plain"
-            )
-            checks["file_handoff"] = {
-                "ok": ok,
-                "mime_type": staged.get("mime_type"),
-                "size": staged.get("size"),
-            }
-            source.unlink(missing_ok=True)
-            staged_path.unlink(missing_ok=True)
-        except Exception as e:
-            checks["file_handoff"] = {"ok": False, "error": str(e)}
-
-        checks["security"] = {
-            "ok": TOKEN_PATH.exists() and BROWSER_TOKEN_PATH.exists(),
-            "desktop_token": TOKEN_PATH.exists(),
-            "browser_token": BROWSER_TOKEN_PATH.exists(),
-            "localhost_only": HOST == "127.0.0.1",
-        }
-        checks["physical_input"] = {
-            "ok": PHYSICAL_INPUT_DEFAULT is False,
-            "enabled_by_default": PHYSICAL_INPUT_DEFAULT,
-        }
-
-        overall = all(bool(v.get("ok")) for v in checks.values())
-        return {"ok": overall, "checks": checks}
-
-    if action == "status":
-        try:
-            browser = forward_browser({"action": "status"})
-        except Exception as e:
-            browser = {"ok": False, "error": str(e)}
-        return {
-            "ready": True,
-            "pid": os.getpid(),
-            "port": PORT,
-            "admin": bool(ctypes.windll.shell32.IsUserAnAdmin()),
-            "screen": list(pyautogui.size()),
-            "cursor": list(pyautogui.position()),
-            "active_window": active_window_info(),
-            "browser": browser,
-        }
-
-    if action == "browser":
-        payload = dict(a.get("payload") or {})
-        if "action" not in payload:
-            payload["action"] = a.get("browser_action")
-        return forward_browser(payload)
-
-    if action == "screen_info":
-        with mss.mss() as sct:
-            return {
-                "monitors": [dict(m) for m in sct.monitors],
-                "size": list(pyautogui.size()),
-            }
-    if action == "screenshot":
-        return save_screenshot(a)
-
-    if action == "cursor":
-        pos = pyautogui.position()
-        return {"x": pos.x, "y": pos.y}
-
-    if action == "active_window":
-        return active_window_info()
-
-    if action == "windows":
-        return {"items": list_windows(a)}
-
-    if action == "uia_info":
-        return window_info(find_uia(a))
-
-    if action == "uia_tree":
-        return uia_tree(a)
-
-    if action == "uia_click":
-        return do_uia_click(a)
-
-    if action == "uia_set_text":
-        return do_uia_set_text(a)
-
-    if action == "uia_call":
-        return uia_call(a)
-
-    if action == "uia_type_input":
-        require_physical(a)
-        return do_uia_type_input(a)
-
-    if action == "window":
-        return do_window_op(a)
-
-    if action == "uia_wait":
-        ctrl = find_uia(a)
-        state = a.get("state", "exists enabled visible ready")
-        ctrl.wait(state, timeout=float(a.get("timeout", 10)))
-        return {"ok": True, "control": window_info(ctrl)}
-    if action == "move":
-        require_physical(a)
-        pyautogui.moveTo(
-            int(a["x"]), int(a["y"]),
-            duration=float(a.get("duration", 0.15)),
+def handle(a):
+    action = a.get("action")
+    if not action:
+        raise ActionError("Missing action", hint="start with {action: 'capabilities'}")
+    spec = catalog.ACTIONS.get(action)
+    handler = HANDLERS.get(action)
+    if spec is None or handler is None:
+        raise ActionError(
+            f"Unknown action: {action}",
+            hint="call capabilities for the full list",
+            did_you_mean=catalog.suggest(action, catalog.ACTIONS),
         )
-        return {"ok": True, "cursor": list(pyautogui.position())}
-
-    if action == "click":
-        require_physical(a)
-        pyautogui.click(
-            x=int(a["x"]), y=int(a["y"]),
-            clicks=int(a.get("clicks", 1)),
-            interval=float(a.get("interval", 0.1)),
-            button=a.get("button", "left"),
+    missing = catalog.missing_params(spec, a)
+    if missing:
+        raise ActionError(
+            f"{action}: missing required parameter(s): {', '.join(missing)}",
+            hint=f"describe {{name: '{action}'}}",
+            params=spec["params"],
         )
-        return {"ok": True}
-
-    if action == "drag":
+    if spec["effect"] == "physical":
         require_physical(a)
-        pyautogui.moveTo(int(a["from_x"]), int(a["from_y"]))
-        pyautogui.dragTo(
-            int(a["to_x"]), int(a["to_y"]),
-            duration=float(a.get("duration", 0.5)),
-            button=a.get("button", "left"),
-        )
-        return {"ok": True}
+    return handler(a)
 
-    if action == "scroll":
-        require_physical(a)
-        pyautogui.scroll(
-            int(a.get("clicks", 0)),
-            x=a.get("x"),
-            y=a.get("y"),
-        )
-        return {"ok": True}
-    if action == "key":
-        require_physical(a)
-        pyautogui.press(
-            a["key"],
-            presses=int(a.get("presses", 1)),
-            interval=float(a.get("interval", 0.05)),
-        )
-        return {"ok": True}
 
-    if action == "hotkey":
-        require_physical(a)
-        keys = a.get("keys") or []
-        if not keys:
-            raise ValueError("keys required")
-        pyautogui.hotkey(*keys, interval=float(a.get("interval", 0.05)))
-        return {"ok": True}
+def error_payload(action, error):
+    body = {
+        "ok": False,
+        "action": action,
+        "error": str(error) or type(error).__name__,
+        "type": type(error).__name__,
+    }
+    if isinstance(error, KeyError):
+        body["error"] = f"missing parameter: {error.args[0] if error.args else error}"
+        body["hint"] = f"describe {{name: '{action}'}}"
+    if isinstance(error, ActionError):
+        if error.hint:
+            body["hint"] = error.hint
+        body.update(core_ext.json_safe(error.extra))
+    return body
 
-    if action == "type_text":
-        require_physical(a)
-        text = str(a.get("text", ""))
-        mode = a.get("mode", "clipboard")
-        if mode == "keys":
-            pyautogui.write(text, interval=float(a.get("interval", 0.02)))
-        else:
-            pyperclip.copy(text)
-            pyautogui.hotkey("ctrl", "v")
-        return {"ok": True, "chars": len(text), "mode": mode}
 
-    if action == "clipboard":
-        if "set" in a:
-            pyperclip.copy(str(a["set"]))
-            return {"ok": True}
-        return {"text": pyperclip.paste()}
-    if action == "uia_find":
-        root_args = {"window": a.get("window")} if a.get("window") else a
-        root = find_uia(root_args)
-        criteria = selector_kwargs(a.get("control") or {})
-        if not criteria:
-            raise ValueError("control selector required")
-        criteria.pop("found_index", None)
-        limit = max(1, min(int(a.get("limit", 50)), 300))
-        matches = root.descendants(**criteria)
-        return {
-            "items": [window_info(x) for x in matches[:limit]],
-            "count": len(matches),
-            "truncated": len(matches) > limit,
-        }
-
-    if action == "launch":
-        executable = a.get("executable")
-        if not executable:
-            raise ValueError("executable required")
-        args = [str(x) for x in (a.get("args") or [])]
-        proc = subprocess.Popen(
-            [str(executable), *args],
-            cwd=a.get("cwd") or None,
-        )
-        return {"pid": proc.pid}
-
-    if action == "processes":
-        name_re = a.get("name_re")
-        limit = max(1, min(int(a.get("limit", 200)), 1000))
-        items = []
-        for proc in psutil.process_iter(["pid", "name", "exe"]):
-            try:
-                info = proc.info
-                if name_re and not re.search(name_re, info.get("name") or "", re.I):
-                    continue
-                items.append(info)
-            except Exception:
-                continue
-            if len(items) >= limit:
-                break
-        return {"items": items}
-
-    if action == "sleep":
-        time.sleep(min(float(a.get("seconds", 1)), 60))
-        return {"ok": True}
-
-    raise ValueError(f"Unknown action: {action}")
 class Handler(BaseHTTPRequestHandler):
     server_version = "RdcHarness/0.1"
     sys_version = ""
@@ -623,23 +754,39 @@ class Handler(BaseHTTPRequestHandler):
         if not secrets.compare_digest(supplied, AGENT_TOKEN):
             self._send(403, {"ok": False, "error": "Invalid token"})
             return
+        action = None
         try:
             length = int(self.headers.get("Content-Length", "0"))
             if length < 0 or length > 2 * 1024 * 1024:
-                raise ValueError("Payload too large")
+                raise ActionError("Payload too large")
             body = self.rfile.read(length)
             payload = json.loads(body.decode("utf-8") or "{}")
+            if not isinstance(payload, dict):
+                raise ActionError("request must be a JSON object")
+            action = payload.get("action")
             result = handle(payload)
             self._send(200, {"ok": True, "result": result})
         except Exception as e:
-            self._send(500, {"ok": False, "error": str(e)})
+            if isinstance(e, PermissionError):
+                status = 403
+            elif isinstance(e, (ActionError, KeyError, json.JSONDecodeError)):
+                status = 400
+            else:
+                status = 500
+            self._send(status, error_payload(action, e))
+
+
 def main():
-    server = ThreadingHTTPServer((HOST, PORT), Handler)
+    # DESKTOP_AGENT_THREADED=0 serves requests one at a time on the main thread:
+    # slower under parallel calls, but every COM call then runs on one STA thread.
+    threaded = os.getenv("DESKTOP_AGENT_THREADED", "1") != "0"
+    server = (ThreadingHTTPServer if threaded else HTTPServer)((HOST, PORT), Handler)
     print(json.dumps({
         "ready": True,
         "pid": os.getpid(),
         "host": HOST,
         "port": PORT,
+        "threaded": threaded,
         "artifact_dir": str(ARTIFACT_DIR),
     }, ensure_ascii=True), flush=True)
     server.serve_forever()

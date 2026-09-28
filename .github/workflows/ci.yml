@@ -24,6 +24,12 @@ jobs:
             src/desktop_agent/mcp/package-lock.json
       - name: Validate Python syntax
         run: python -m compileall -q src tools tests
+      - name: Lint Python (undefined names, unused imports)
+        run: |
+          python -m pip install --disable-pip-version-check pyflakes==3.4.0
+          python -m pyflakes src tools tests
+      - name: Install desktop agent runtime for behaviour tests
+        run: python -m pip install --disable-pip-version-check -r src/desktop_agent/requirements.txt
       - name: Validate Node syntax
         shell: pwsh
         run: |
