@@ -139,7 +139,9 @@ class RepositoryContractTests(unittest.TestCase):
         hook = (ROOT / ".githooks" / "pre-commit").read_text(encoding="utf-8")
         self.assertIn("gitleaks git --staged", hook)
         self.assertIn("local/denylist.txt", hook)
-        self.assertIn("gitleaks.exe git --no-banner --redact --log-opts=\"--all\"", read(".github/workflows/ci.yml"))
+        ci = read(".github/workflows/ci.yml")
+        self.assertIn('git --no-banner --redact --log-opts="--all"', ci)
+        self.assertIn("RUNNER_TEMP", ci)  # the download must not land in the checkout
         self.assertTrue((ROOT / ".gitleaks.toml").exists())
 
 
