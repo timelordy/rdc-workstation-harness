@@ -291,9 +291,13 @@ if ($InstallRemoteCommander) {
     $RemoteEntry = Join-Path $RemoteDir "node_modules\@wonderwhy-er\desktop-commander\dist\index.js"
     if (-not (Test-Path $RemoteEntry)) { throw "Remote Desktop Commander entry point was not installed." }
     $RemoteRunner = Join-Path $InstallRoot "run-remote-commander.ps1"
+    # The share hook is loaded into the device agent with --import. It only acts
+    # on remote read_file of images/documents and only when RDC_HARNESS_SHARE_CMD
+    # is set; otherwise results pass through unchanged.
     Write-PowerShellFile $RemoteRunner @"
 . "`$PSScriptRoot\config.ps1"
-& "$(Quote-Single $Node)" "`$PSScriptRoot\remote-commander\node_modules\@wonderwhy-er\desktop-commander\dist\index.js" remote
+`$hook = ([uri](Join-Path `$PSScriptRoot "tools\rdc_share_hook.mjs")).AbsoluteUri
+& "$(Quote-Single $Node)" --import `$hook "`$PSScriptRoot\remote-commander\node_modules\@wonderwhy-er\desktop-commander\dist\index.js" remote
 exit `$LASTEXITCODE
 "@
 }
