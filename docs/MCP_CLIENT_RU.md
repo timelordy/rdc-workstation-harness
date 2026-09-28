@@ -35,9 +35,20 @@ transport: stdio
 ## Доступные tools
 
 - `desktop_health` — проверить локальный router;
-- `desktop_capabilities` — получить список групп возможностей;
+- `desktop_capabilities` — все действия по группам с эффектом, browser actions,
+  адаптеры и рекомендуемый порядок маршрутизации;
+- `desktop_describe` — параметры и пример для действия (`name`), browser action
+  (`browser`) или адаптера (`adapter`);
+- `desktop_look` — увидеть окно, область или монитор: возвращает картинку
+  (MCP image) и формулу перевода пикселей картинки в экранные координаты.
+  Окно снимается в фоне без фокуса; для GPU-окон, где фоновый снимок чёрный,
+  берутся видимые пиксели экрана;
 - `desktop_action` — передать structured action;
-- `desktop_send_file` — вернуть локальный файл как MCP resource.
+- `desktop_send_file` — вернуть локальный файл как MCP resource (токены и
+  профили отдать нельзя).
+
+Proxy ждёт ответа не меньше, чем `timeout` самого действия (секунды для
+desktop actions, миллисекунды для browser payload), максимум час.
 
 Первый вызов после подключения:
 

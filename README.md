@@ -22,6 +22,7 @@ Playwright, обычные окна через UI Automation/Win32, прилож
 | Browser Bridge | DOM/ARIA‑управление браузером через Playwright | `127.0.0.1:17321` |
 | MCP proxy | отдаёт Desktop Agent MCP‑совместимому клиенту | stdio |
 | `rdc_web.py` | предохранитель для заметных браузерных действий | CLI |
+| `pc-agent` | вызов Desktop Agent из терминала RDC, скриншоты для ChatGPT | CLI в PATH |
 ## Архитектура
 
 ```text
@@ -44,6 +45,11 @@ Remote Desktop Commander Remote
 Маршрутизация строится снизу вверх по стабильности: native API/SDK → COM/CDP/CLI
 → адаптер → Playwright → UIA → Win32 → физический ввод. Реальная мышь и
 клавиатура являются последним вариантом и по умолчанию запрещены.
+
+Агент описывает себя сам: `desktop_capabilities` возвращает все действия с их
+эффектом (`read` / `write` / `exec` / `physical`) и установленные адаптеры, а
+`desktop_describe` — параметры и пример конкретного действия или адаптера.
+Подробнее: [каталог действий](docs/ARCHITECTURE_RU.md#каталог-действий-и-самоописание).
 
 ## Быстрый запуск
 
@@ -169,6 +175,7 @@ tests/               static security/regression checks
 - [Архитектура и маршрутизация](docs/ARCHITECTURE_RU.md)
 - [Remote Desktop Commander](docs/REMOTE_COMMANDER_RU.md)
 - [Подключение MCP-клиента](docs/MCP_CLIENT_RU.md)
+- [ChatGPT (веб): pc-agent и скриншоты в чат](docs/CHATGPT_RU.md)
 - [Browser Bridge](docs/BROWSER_BRIDGE_RU.md)
 - [Эксплуатация](docs/OPERATIONS_RU.md)
 - [Навигатор обновлений](docs/UPDATES_RU.md)

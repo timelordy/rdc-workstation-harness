@@ -1,12 +1,35 @@
 import json
-import os
 import subprocess
 import sys
-import tempfile
 import uuid
 from pathlib import Path
 
 import win32com.client
+
+DESCRIPTION = (
+    "AutoCAD via COM. Attaches to an already running AutoCAD; never starts one. "
+    "Call status first to see open documents."
+)
+ACTIONS = {
+    "status": {
+        "effect": "read",
+        "summary": "AutoCAD version, visibility, active and open documents.",
+        "params": {},
+    },
+    "python": {
+        "effect": "write",
+        "summary": (
+            "Run Python in a separate process with app, doc, modelspace and args "
+            "pre-bound; assign the return value to `result`. Can modify the drawing."
+        ),
+        "params": {
+            "code": "Python source (required)",
+            "args": "JSON object available as `args`",
+            "timeout": "seconds, 1..1800, default 120",
+        },
+        "example": {"action": "python", "code": "result = modelspace.Count"},
+    },
+}
 
 PROGIDS = [
     "AutoCAD.Application.24.1",
@@ -145,4 +168,6 @@ def handle(payload, context):
         return status()
     if action == "python":
         return run_python(payload, context)
-    raise ValueError("unknown autocad adapter action: %s" % action)
+    raise ValueError(
+        "unknown autocad adapter action: %s (valid: %s)" % (action, ", ".join(sorted(ACTIONS)))
+    )
