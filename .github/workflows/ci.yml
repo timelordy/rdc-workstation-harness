@@ -12,6 +12,20 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Scan full history for secrets (gitleaks)
+        shell: pwsh
+        run: |
+          # Pinned version and SHA-256 (from the release's checksums.txt).
+          $v = "8.30.1"
+          $sha256 = "d29144deff3a68aa93ced33dddf84b7fdc26070add4aa0f4513094c8332afc4e"
+          $zip = Join-Path $env:RUNNER_TEMP "gitleaks_${v}_windows_x64.zip"
+          Invoke-WebRequest "https://github.com/gitleaks/gitleaks/releases/download/v$v/gitleaks_${v}_windows_x64.zip" -OutFile $zip
+          if ((Get-FileHash $zip -Algorithm SHA256).Hash.ToLower() -ne $sha256) { throw "gitleaks checksum mismatch" }
+          $bin = Join-Path $env:RUNNER_TEMP "gitleaks-bin"
+          Expand-Archive $zip $bin
+          & (Join-Path $bin "gitleaks.exe") git --no-banner --redact --log-opts="--all" .
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"

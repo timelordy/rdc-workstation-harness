@@ -6,12 +6,23 @@ Keep the harness local, explicit and inspectable. Prefer a stable application
 interface over screen coordinates. New features must not weaken the default
 loopback-only boundary or enable physical input by default.
 
+## Once per clone
+
+```powershell
+git config core.hooksPath .githooks
+```
+
+The pre-commit hook runs gitleaks on staged changes, rejects anything staged
+from `local/` and checks your private stop-list. Keep personal uploaders, cloud
+credentials and stop-words outside Git: see `docs/LOCAL_PRIVATE_RU.md`.
+
 ## Before opening a pull request
 
 ```powershell
 python -m compileall -q src tools tests
 node --check src\browser_bridge\bridge.js
 node --check src\desktop_agent\mcp\server.mjs
+node --test tests/share_hook.test.mjs
 python -m unittest discover -s tests -v
 ```
 

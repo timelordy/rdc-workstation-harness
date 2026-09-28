@@ -1,0 +1,50 @@
+#!/bin/sh
+# Blocks commits that would publish secrets or personal data.
+# Enable once per clone:  git config core.hooksPath .githooks
+#
+# 1. gitleaks on the staged diff (tokens, keys, passwords).
+# 2. Personal stop-words from local/denylist.txt (one regex per line, ignored by
+#    git), e.g. your cloud provider, account names, hostnames, project names.
+# 3. Nothing may be staged from local/ except its README.
+
+fail=0
+
+staged_local=$(git diff --cached --name-only --diff-filter=ACMR | grep '^local/' | grep -v '^local/README.md$')
+if [ -n "$staged_local" ]; then
+  echo "pre-commit: files under local/ are private and must not be committed:" >&2
+  echo "$staged_local" >&2
+  fail=1
+fi
+
+if command -v gitleaks >/dev/null 2>&1; then
+  gitleaks git --staged --no-banner --redact --log-level warn . || fail=1
+elif [ -x "$LOCALAPPDATA/Programs/gitleaks/gitleaks.exe" ]; then
+  "$LOCALAPPDATA/Programs/gitleaks/gitleaks.exe" git --staged --no-banner --redact --log-level warn . || fail=1
+else
+  echo "pre-commit: gitleaks not found; install it (see docs/LOCAL_PRIVATE_RU.md). Secret scan skipped." >&2
+fi
+
+denylist="local/denylist.txt"
+# Fallback: a stop-list kept outside the clone, shared by all clones on this PC.
+[ -f "$denylist" ] || denylist="${USERPROFILE:-$HOME}/.rdc-workstation-harness/local/denylist.txt"
+if [ -f "$denylist" ]; then
+  patterns=$(mktemp)
+  grep -v '^[[:space:]]*#' "$denylist" | grep -v '^[[:space:]]*$' | tr -d '\r' > "$patterns"
+  if [ -s "$patterns" ]; then
+    # Added lines and added file names; diff headers excluded.
+    hits=$( { git diff --cached -U0 --no-color | grep '^+' | grep -v '^+++'; \
+              git diff --cached --name-only --diff-filter=ACMR; } | grep -i -E -f "$patterns")
+    if [ -n "$hits" ]; then
+      echo "pre-commit: staged changes match local/denylist.txt:" >&2
+      echo "$hits" | head -n 20 >&2
+      fail=1
+    fi
+  fi
+  rm -f "$patterns"
+fi
+
+if [ "$fail" -ne 0 ]; then
+  echo "pre-commit: commit blocked. Move personal data to local/ or remove it." >&2
+  exit 1
+fi
+exit 0

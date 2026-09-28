@@ -2,6 +2,15 @@
 
 All notable changes are documented here.
 
+## [0.2.3] - 2026-09-28
+
+### Security
+
+- Personal data stays out of Git in three layers: `.gitignore` for `local/`, `*.local.*`, `rclone.conf` and `share-*.ps1`; a pre-commit hook (`.githooks/pre-commit`, enable with `git config core.hooksPath .githooks`) that runs gitleaks on staged changes, rejects files from `local/` and checks a private stop-list; and a CI job that scans the full history with a checksum-verified gitleaks.
+- `.gitleaks.toml` adds rules for harness tokens, rclone OAuth tokens and public cloud share links.
+- Tests assert that the repo ships the share mechanism only, with no cloud provider or uploader.
+- `docs/LOCAL_PRIVATE_RU.md` explains where private files live and what to do if something leaks.
+
 ## [0.2.2] - 2026-09-28
 
 ### Added

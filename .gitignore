@@ -36,6 +36,15 @@ screenshots/
 # Local configuration
 config.ps1
 local-*.ps1
+
+# Personal, machine-only files (uploaders, cloud remotes, stop-words).
+# Everything here stays on this PC; see docs/LOCAL_PRIVATE_RU.md.
+local/*
+!local/README.md
+*.local.*
+rclone.conf
+share-*.ps1
+.private-denylist
 .vscode/
 .idea/
 .DS_Store
