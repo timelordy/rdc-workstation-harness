@@ -176,6 +176,7 @@ tests/               static security/regression checks
 - [Remote Desktop Commander](docs/REMOTE_COMMANDER_RU.md)
 - [Подключение MCP-клиента](docs/MCP_CLIENT_RU.md)
 - [ChatGPT (веб): pc-agent и скриншоты в чат](docs/CHATGPT_RU.md)
+- [Личные данные и репозиторий](docs/LOCAL_PRIVATE_RU.md)
 - [Browser Bridge](docs/BROWSER_BRIDGE_RU.md)
 - [Эксплуатация](docs/OPERATIONS_RU.md)
 - [Навигатор обновлений](docs/UPDATES_RU.md)

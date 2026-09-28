@@ -1,0 +1,23 @@
+# gitleaks configuration: default rules plus harness-specific ones.
+[extend]
+useDefault = true
+
+[[rules]]
+id = "rdc-harness-token-file-content"
+description = "64-hex local harness token (desktop.token / browser.token)"
+regex = '''(?i)(desktop|browser|revit)[._-]?token['"\s:=]+[0-9a-f]{64}'''
+
+[[rules]]
+id = "rclone-config-token"
+description = "rclone remote with an embedded OAuth token"
+regex = '''token\s*=\s*\{"access_token":'''
+
+[[rules]]
+id = "public-share-link"
+description = "Public cloud share link (should come from local config, not the repo)"
+regex = '''https://(drive\.google\.com/file/d/|1drv\.ms/|www\.dropbox\.com/s/|[a-z0-9.-]+/(i|d|s)/[A-Za-z0-9_-]{12,}$)[A-Za-z0-9_\-/]*'''
+
+[allowlist]
+description = "Lockfile integrity hashes and test fixtures"
+paths = ['''package-lock\.json$''']
+regexes = ['''example\.test''']
