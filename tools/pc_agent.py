@@ -63,7 +63,7 @@ def request(method, route, payload=None):
 
 
 def ascii_path(path):
-    """8.3 short form of a non-ASCII path (e.g. C:\\Users\\Анвар -> C:\\Users\\2AEA~1).
+    """8.3 short form of a non-ASCII path (e.g. C:\\Users\\Иван -> C:\\Users\\D0A5~1).
 
     Terminals between this CLI and the model (PowerShell 5.1 on an OEM code page)
     mangle Cyrillic, and read_file then fails on the garbled path. The short form

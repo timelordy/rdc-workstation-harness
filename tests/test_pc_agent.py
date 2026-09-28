@@ -33,7 +33,7 @@ class PcAgentParseTests(unittest.TestCase):
         if os.name != "nt":
             return
         with tempfile.TemporaryDirectory() as tmp:
-            target = Path(tmp) / "Анвар" / "look.jpg"
+            target = Path(tmp) / "Пользователь" / "look.jpg"
             target.parent.mkdir()
             target.write_bytes(b"x")
             short = PC.ascii_path(str(target))
