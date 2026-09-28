@@ -483,6 +483,9 @@ def grab_window(hwnd, flags=2):
 
 def capture_window(a, context):
     hwnd = int(a["hwnd"])
+    if is_hung(hwnd):
+        raise ActionError("window is not responding; background capture would block",
+                          hint="use look {hwnd} (falls back to screen pixels) or screenshot {region}")
     image, (left, top, right, bottom), rendered = grab_window(hwnd, a.get("flags", 2))
     width, height = image.size
 
@@ -560,23 +563,36 @@ def save_look(jpeg, artifact_dir):
     return path
 
 
+def is_hung(hwnd):
+    """True when the window's thread stopped pumping messages (IsHungAppWindow)."""
+    return bool(ctypes.windll.user32.IsHungAppWindow(int(hwnd)))
+
+
 def look(a, context):
     """Capture a window, region or monitor and return it as an image for the model."""
     hwnd = _find_hwnd(a, context)
     source = "screen"
     note = None
     if hwnd is not None:
-        image, rect, rendered = grab_window(hwnd)
-        source = "window"
-        # PrintWindow returns black for many GPU/DirectX surfaces; fall back to
-        # the visible screen pixels of the same rectangle.
-        if not rendered or image.convert("L").getextrema()[1] < 8:
-            if win32gui.IsIconic(hwnd):
-                raise ActionError("window is minimized and cannot be captured",
-                                  hint="window {op: 'restore'} first")
+        if win32gui.IsIconic(hwnd):
+            raise ActionError("window is minimized and cannot be captured",
+                              hint="window {op: 'restore'} first")
+        if is_hung(hwnd):
+            # PrintWindow sends WM_PRINT and would block on a hung window.
+            rect = win32gui.GetWindowRect(hwnd)
             image, rect = _grab_screen(rect)
             source = "screen_region"
-            note = "background capture was blank (GPU surface); used visible screen pixels, overlapping windows may show"
+            note = "window is not responding; used visible screen pixels"
+        else:
+            image, rect, rendered = grab_window(hwnd)
+            source = "window"
+            # PrintWindow returns black for many GPU/DirectX surfaces; fall back
+            # to the visible screen pixels of the same rectangle.
+            if not rendered or image.convert("L").getextrema()[1] < 8:
+                image, rect = _grab_screen(rect)
+                source = "screen_region"
+                note = ("background capture was blank (GPU surface); used visible screen pixels, "
+                        "overlapping windows may show")
         title = win32gui.GetWindowText(hwnd)
     elif a.get("region"):
         r = a["region"]
