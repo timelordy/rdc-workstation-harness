@@ -2,6 +2,16 @@
 
 All notable changes are documented here.
 
+## [0.2.1] - 2026-09-28
+
+### Added
+
+- `pc-agent look --share` and `pc-agent share <file>`: hand a screenshot or file to a user-configured uploader (`RDC_HARNESS_SHARE_CMD`) and return its URL. ChatGPT web drops images returned by `read_file` through Remote Desktop Commander, so a link is the working delivery path. Nothing is uploaded unless the variable is set.
+
+### Changed
+
+- `docs/CHATGPT_RU.md` documents that `read_file` images do not reach ChatGPT web and updates the suggested ChatGPT instructions to use links.
+
 ## [0.2.0] - 2026-09-28
 
 ### Added

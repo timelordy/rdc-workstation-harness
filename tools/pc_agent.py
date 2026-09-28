@@ -10,12 +10,22 @@ base64: images are saved to disk and returned as a path to open with read_file.
   pc-agent look                                   whole screen
   pc-agent look --window AutoCAD                  window title regex
   pc-agent look --hwnd 133850 --max-side 1024
+  pc-agent look --share                           also publish, print a link
+  pc-agent share <file>                           publish any file, print a link
   pc-agent '{"action": "windows", "title_re": "Excel"}'
   pc-agent @request.json
+
+Sharing: some chat clients (ChatGPT web via Remote Desktop Commander) drop
+images returned by read_file. --share hands the file to a command you choose,
+set in RDC_HARNESS_SHARE_CMD, e.g. an uploader to your own storage. It gets
+the file path as its last argument and must print the URL as the last line of
+stdout. Nothing is uploaded unless that variable is set.
 """
 import argparse
 import json
 import os
+import shlex
+import subprocess
 import sys
 import urllib.error
 import urllib.request
@@ -71,6 +81,47 @@ def ascii_path(path):
     return path
 
 
+SHARE_ENV = "RDC_HARNESS_SHARE_CMD"
+
+
+def share_command():
+    """The configured uploader, from the environment or the user registry."""
+    raw = os.getenv(SHARE_ENV)
+    if not raw and os.name == "nt":
+        # Read the persisted user value too: a long-running parent (e.g. the
+        # Remote Commander) may have started before the variable was set.
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as key:
+                raw = winreg.QueryValueEx(key, SHARE_ENV)[0]
+        except OSError:
+            raw = None
+    return raw or None
+
+
+def share(path, timeout=120):
+    """Run the configured uploader for one file; returns a result dict."""
+    raw = share_command()
+    if not raw:
+        return {"ok": False, "error": f"sharing is not configured: set {SHARE_ENV}",
+                "hint": "a command that takes a file path and prints a URL; see docs/CHATGPT_RU.md"}
+    if not Path(path).is_file():
+        return {"ok": False, "error": f"file not found: {path}"}
+    cmd = shlex.split(raw, posix=False) + [str(path)]
+    cmd = [c[1:-1] if len(c) > 1 and c[0] == c[-1] == '"' else c for c in cmd]
+    try:
+        run = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                             errors="replace", timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return {"ok": False, "error": f"share command failed: {e}"}
+    lines = [line.strip() for line in run.stdout.splitlines() if line.strip()]
+    url = lines[-1] if lines else ""
+    if run.returncode != 0 or not url.startswith(("http://", "https://")):
+        return {"ok": False, "error": "share command did not print a URL",
+                "returncode": run.returncode, "stderr": run.stderr[-2000:]}
+    return {"ok": True, "url": url}
+
+
 def strip_images(value):
     """Safety net: a terminal must never receive base64 blobs."""
     if isinstance(value, dict):
@@ -89,8 +140,11 @@ def look_payload(argv):
     ap.add_argument("--region", help="left,top,width,height")
     ap.add_argument("--monitor", type=int)
     ap.add_argument("--max-side", type=int)
+    ap.add_argument("--share", action="store_true", help=f"publish via {SHARE_ENV} and print the URL")
     args = ap.parse_args(argv)
     payload = {"action": "look", "save": True}
+    if args.share:
+        payload["_share"] = True
     if args.window:
         payload["window"] = {"title_re": args.window}
     if args.hwnd is not None:
@@ -132,15 +186,27 @@ def main(argv=None):
         return 0
     if argv == ["health"]:
         result = request("GET", "/health")
+    elif argv[:1] == ["share"]:
+        if len(argv) != 2:
+            raise SystemExit("usage: pc-agent share <file>")
+        result = share(argv[1])
     else:
         payload = parse(argv)
         is_look = payload.get("action") == "look"
+        want_share = bool(payload.pop("_share", False))
         if is_look:
             payload["save"] = True
         result = request("POST", "/action", payload)
         if is_look and result.get("ok"):
             result["result"]["path"] = ascii_path(result["result"]["path"])
             result["next"] = "open result.path with read_file to see the image"
+            if want_share:
+                shared = share(result["result"]["path"])
+                if shared["ok"]:
+                    result["result"]["url"] = shared["url"]
+                    result["next"] = "give the user result.url (a link to the image)"
+                else:
+                    result["share_error"] = shared
     result = strip_images(result)
     # ASCII-escaped JSON survives any console code page; valid JSON either way.
     sys.stdout.write(json.dumps(result, ensure_ascii=True, indent=1) + "\n")
