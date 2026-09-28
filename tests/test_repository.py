@@ -78,6 +78,17 @@ class RepositoryContractTests(unittest.TestCase):
         self.assertIn("Write-PowerShellFile $ConfigPath $Config", installer)
         self.assertIn('$Config += "`r`n`$env:PW_EXECUTABLE', installer)
 
+    def test_pc_agent_is_installed_on_path(self):
+        installer = read("scripts/install.ps1")
+        uninstaller = read("scripts/uninstall.ps1")
+        self.assertTrue((ROOT / "tools" / "pc-agent.cmd").exists())
+        self.assertIn('SetEnvironmentVariable("Path"', installer)
+        self.assertIn("$ToolsDir", installer)
+        self.assertIn('SetEnvironmentVariable("Path"', uninstaller)
+        wrapper = (ROOT / "tools" / "pc-agent.cmd").read_bytes()
+        self.assertIn(b"\r\n", wrapper)
+        self.assertIn(b"pc_agent.py", wrapper)
+
     def test_version_and_changelog_match(self):
         version = read("VERSION").strip()
         self.assertRegex(version, r"^\d+\.\d+\.\d+$")

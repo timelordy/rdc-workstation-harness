@@ -298,6 +298,15 @@ exit `$LASTEXITCODE
 "@
 }
 
+Write-Step "Adding pc-agent to the user PATH"
+# Terminal clients (ChatGPT via Remote Desktop Commander) call `pc-agent ...`.
+$UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
+$PathParts = @($UserPath -split ";" | Where-Object { $_ })
+if ($PathParts -notcontains $ToolsDir) {
+    [Environment]::SetEnvironmentVariable("Path", (($PathParts + $ToolsDir) -join ";"), "User")
+    Write-Host "Added $ToolsDir to the user PATH. Restart Remote Commander to pick it up."
+}
+
 $SourceVersion = $env:RDC_HARNESS_SOURCE_VERSION
 if (-not $SourceVersion) {
     $SourceVersion = (Get-Content -LiteralPath (Join-Path $RepoRoot "VERSION") -Raw).Trim()
