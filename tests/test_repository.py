@@ -115,8 +115,32 @@ class RepositoryContractTests(unittest.TestCase):
 
     def test_gitignore_covers_sensitive_runtime_state(self):
         ignore = read(".gitignore")
-        for item in ("*.token", ".desktop-commander-device/", "browser-profile/", "storage-state.json"):
+        for item in ("*.token", ".desktop-commander-device/", "browser-profile/", "storage-state.json",
+                     "local/*", "rclone.conf", "share-*.ps1"):
             self.assertIn(item, ignore)
+
+    def test_local_dir_holds_only_readme(self):
+        tracked = [p.name for p in (ROOT / "local").iterdir() if p.is_file()]
+        # Only README may exist in a fresh clone; other files are private and ignored.
+        self.assertIn("README.md", tracked)
+
+    def test_no_uploader_implementation_in_repo(self):
+        # The repo ships the share mechanism only: no uploader script and no
+        # cloud CLI calls. Which cloud is used is local configuration.
+        self.assertEqual([], [p.name for p in (ROOT / "tools").glob("share-*.ps1")])
+        offenders = []
+        pattern = re.compile(r"\brclone(\.exe)?\s+(copy|copyto|link|config)\b", re.I)
+        for path in repository_text_files():
+            if pattern.search(path.read_text(encoding="utf-8", errors="replace")):
+                offenders.append(str(path.relative_to(ROOT)))
+        self.assertEqual([], offenders)
+
+    def test_secret_scanning_is_wired(self):
+        hook = (ROOT / ".githooks" / "pre-commit").read_text(encoding="utf-8")
+        self.assertIn("gitleaks git --staged", hook)
+        self.assertIn("local/denylist.txt", hook)
+        self.assertIn("gitleaks.exe git --no-banner --redact --log-opts=\"--all\"", read(".github/workflows/ci.yml"))
+        self.assertTrue((ROOT / ".gitleaks.toml").exists())
 
 
 if __name__ == "__main__":

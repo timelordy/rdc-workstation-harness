@@ -12,6 +12,20 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Scan full history for secrets (gitleaks)
+        shell: pwsh
+        run: |
+          $v = "8.30.1"
+          $zip = "gitleaks_${v}_windows_x64.zip"
+          $base = "https://github.com/gitleaks/gitleaks/releases/download/v$v"
+          Invoke-WebRequest "$base/$zip" -OutFile $zip
+          $sums = (Invoke-WebRequest "$base/gitleaks_${v}_checksums.txt").Content -split "`n"
+          $expected = (($sums | Where-Object { $_ -match [regex]::Escape($zip) }) -split '\s+')[0]
+          if ((Get-FileHash $zip -Algorithm SHA256).Hash.ToLower() -ne $expected) { throw "gitleaks checksum mismatch" }
+          Expand-Archive $zip gitleaks-bin
+          ./gitleaks-bin/gitleaks.exe git --no-banner --redact --log-opts="--all" .
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
