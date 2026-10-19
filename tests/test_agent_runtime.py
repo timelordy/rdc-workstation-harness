@@ -82,6 +82,20 @@ class AgentRuntimeTests(unittest.TestCase):
         except urllib.error.HTTPError as e:
             return e.code, json.loads(e.read())
 
+    def test_universal_tools_are_discoverable_and_launcher_dry_run_is_read_only(self):
+        status, body = self.call({"action": "capabilities"})
+        self.assertEqual(200, status, body)
+        names = {item["name"] for group in body["result"]["actions"].values() for item in group}
+        self.assertTrue({"app_catalog", "app_open", "app_observe", "app_act", "app_wait"}.issubset(names))
+        status, body = self.call({"action": "app_open", "executable": sys.executable, "dry_run": True})
+        self.assertEqual(200, status, body)
+        self.assertTrue(body["result"]["dry_run"])
+        self.assertFalse(body["result"]["shell"])
+        self.assertNotIn("pid", body["result"])
+        status, body = self.call({"action": "app_open", "executable": sys.executable, "dry_run": "true"})
+        self.assertEqual(400, status, body)
+        self.assertFalse(body["action_started"])
+
     def test_rejects_bad_token(self):
         status, body = self.call({"action": "capabilities"}, token="x")
         self.assertEqual(403, status)

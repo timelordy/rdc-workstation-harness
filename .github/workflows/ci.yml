@@ -78,6 +78,6 @@ jobs:
       - name: Run Node and real browser tests
         env:
           RDC_BROWSER_INTEGRATION: "1"
-        run: node --test tests/share_hook.test.mjs tests/control_tools.test.mjs tests/browser_bridge.test.mjs tests/browser_bridge.integration.test.mjs
+        run: node --test tests/share_hook.test.mjs tests/control_tools.test.mjs tests/browser_bridge.test.mjs tests/browser_bridge.integration.test.mjs tests/cdp_attach.test.mjs tests/cdp_attach.integration.test.mjs
       - name: Run regression tests
         run: python -m unittest discover -s tests -v

@@ -129,6 +129,7 @@ function createBrowserSession({ chromium, profileDir, stateFile, artifactDir,
   let context = null;
   let page = null;
   let headed = initialHeaded;
+  let attached = false;
   let consoleBuffer = [];
   let errorBuffer = [];
   let queue = Promise.resolve();
@@ -166,6 +167,8 @@ function createBrowserSession({ chromium, profileDir, stateFile, artifactDir,
 
   async function launch() {
     if (context) return;
+    if (attached) throw targetError('EXTERNAL_DISCONNECTED', 'The attached application disconnected',
+      'Attach again or explicitly detach. A managed browser will not be launched as a fallback.');
     const options = { headless: !headed, acceptDownloads: true,
       viewport: { width: 1440, height: 1000 }, downloadsPath: artifactDir };
     if (executablePath) options.executablePath = executablePath;
@@ -188,10 +191,17 @@ function createBrowserSession({ chromium, profileDir, stateFile, artifactDir,
   }
 
   async function saveState() {
-    if (context) await context.storageState({ path: stateFile, indexedDB: true });
+    if (context && !attached) await context.storageState({ path: stateFile, indexedDB: true });
   }
 
   async function closeBrowser() {
+    if (attached) {
+      // Never close the borrowed default context or persist its cookies/storage.
+      if (browser) await browser.close(); // CDP connection teardown, tested against an independent browser.
+      context = null; browser = null; page = null; attached = false;
+      consoleBuffer = []; errorBuffer = [];
+      return { ok: true, detached: true, external_application_closed: false, state_saved: false };
+    }
     const closingContext = context;
     const closingBrowser = browser;
     let persistence = {};
@@ -240,7 +250,10 @@ function createBrowserSession({ chromium, profileDir, stateFile, artifactDir,
     const explicit = explicitPage(a);
     if (explicit) return explicit;
     if (!page || page.isClosed()) {
-      page = context.pages().find(p => !p.isClosed()) || await context.newPage();
+      page = context.pages().find(p => !p.isClosed()) || null;
+      if (!page && attached) throw targetError('NO_EXTERNAL_TAB', 'Attached application has no available page',
+        'Open a page explicitly; read operations never create a page in a borrowed application.');
+      if (!page) page = await context.newPage();
       wirePage(page);
     }
     return page;
@@ -277,14 +290,46 @@ function createBrowserSession({ chromium, profileDir, stateFile, artifactDir,
     return p;
   }
 
+  async function attachBrowser(a) {
+    if (context) throw targetError('SESSION_BUSY', 'A browser session is already active',
+      'Close a managed session or detach a borrowed one explicitly before attaching.');
+    let endpoint;
+    try { endpoint = new URL(a.endpoint); } catch { throw new Error('endpoint must be a loopback CDP WebSocket URL'); }
+    if (endpoint.protocol !== 'ws:' || !['127.0.0.1', '[::1]'].includes(endpoint.hostname)
+        || !endpoint.port || endpoint.port === '0' || endpoint.username || endpoint.password || endpoint.search || endpoint.hash
+        || !/^\/devtools\/browser\/[A-Za-z0-9-]+$/.test(endpoint.pathname)) {
+      throw new Error('Use ws://127.0.0.1:<port>/devtools/browser/<id> (or [::1]); remote hosts, credentials and HTTP redirects are not accepted');
+    }
+    const timeout = boundedInteger(a.timeout, 10000, 30000, 'timeout');
+    const remote = await chromium.connectOverCDP(endpoint.href, { timeout, noDefaults: true });
+    const existing = remote.contexts()[0];
+    if (!existing) { await remote.close(); throw new Error('External application exposes no browser context'); }
+    browser = remote; context = existing; attached = true;
+    page = context.pages().find(p => !p.isClosed()) || null;
+    for (const p of context.pages()) wirePage(p);
+    context.on('page', p => { wirePage(p); if (!page || page.isClosed()) page = p; });
+    remote.on('disconnected', () => {
+      if (browser === remote) { context = null; browser = null; page = null; }
+    });
+    return { ok: true, ownership: 'attached', pages: context.pages().length, state_persistence: false,
+      hint: 'Use tabs and explicit tab_id. detach/close disconnect without closing the external application.' };
+  }
+
   async function handle(a) {
     if (!a || typeof a.action !== 'string' || !a.action) throw new Error('Missing action');
     const hasFrame = a.frame_id != null || a.frame_selector != null;
     if (hasFrame && !FRAME_ACTIONS.has(a.action)) throw new Error(`Action ${a.action} does not support frame targeting`);
-    if (a.action === 'status') return { running: !!context, headed, profileDir, artifactDir,
+    if (a.action === 'attach') return attachBrowser(a);
+    if (a.action === 'detach') {
+      if (!attached) return { ok: true, detached: false };
+      return closeBrowser();
+    }
+    if (a.action === 'status') return { running: !!context, headed, profileDir: attached ? null : profileDir, artifactDir,
+      ownership: attached ? 'attached' : 'managed', state_persistence: !attached,
       pages: context ? context.pages().length : 0 };
     if (a.action === 'close') return closeBrowser();
     if (a.action === 'restart') {
+      if (attached) throw new Error('restart is not allowed for an attached application; detach explicitly first');
       const closed = await closeBrowser();
       if (typeof a.headed === 'boolean') headed = a.headed;
       await launch();
