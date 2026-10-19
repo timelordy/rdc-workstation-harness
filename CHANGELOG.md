@@ -6,6 +6,18 @@ All notable changes are documented here.
 
 ### Added
 
+- Application-independent `desktop_app` MCP tool and `app_catalog`, `app_open`,
+  `app_observe`, `app_act`, `app_wait` actions. UIA/Win32 backend negotiation is
+  based on exposed control capabilities, not application names or adapters.
+- Short-lived control references, process/control identity checks, typed desired
+  state operations, preconditions, dry-run, read-back and bounded process-local
+  request receipts. An uncertain native write never triggers a fallback write.
+- Explicit loopback CDP `attach`/`detach` for existing Chromium/Electron sessions.
+  Borrowed applications remain open and their session state is not auto-saved;
+  disconnection never silently switches to a new managed browser.
+- Disposable native Windows fixture exercised through both UIA and Win32, and
+  a real Chromium CDP ownership/lifecycle integration test.
+
 - Stable live browser tab IDs, frame discovery/targeting, bounded element state
   inspection, native select/checkbox controls, hover and scroll-into-view.
 - `uia_inspect` exposes supported UIA patterns and bounded text/value, toggle,
@@ -13,7 +25,7 @@ All notable changes are documented here.
 - Discoverable MCP tools `desktop_browser` and `desktop_inspect`; the existing
   generic action and terminal paths remain available.
 - Portable queue/UIA behaviour tests, browser fixture tests and a staged roadmap
-  for existing browser sessions, application discovery and a Revit API adapter.
+  for application-independent control, recovery and optional framework drivers.
 
 ### Fixed
 

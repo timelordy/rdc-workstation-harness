@@ -27,6 +27,7 @@ import win32com.client
 import catalog
 import core_ext
 import uia_support
+from app_control import AppController
 from core_ext import ActionError
 from dispatch import QueueWaitTimeout, SerialDispatcher
 from pywinauto import Desktop
@@ -68,6 +69,14 @@ def _finish_com_apartment():
     pythoncom.CoUninitialize()
 
 
+def _finish_uia_apartment():
+    controller = globals().get("APP_CONTROLLER")
+    if controller is not None:
+        controller.refs.clear()
+        controller.receipts.clear()
+    pythoncom.CoUninitialize()
+
+
 COM_DISPATCHER = SerialDispatcher(
     "desktop-com-sta",
     initialize=lambda: pythoncom.CoInitializeEx(pythoncom.COINIT_APARTMENTTHREADED),
@@ -77,7 +86,7 @@ COM_DISPATCHER = SerialDispatcher(
 UIA_DISPATCHER = SerialDispatcher(
     "desktop-uia-mta",
     initialize=lambda: pythoncom.CoInitializeEx(pythoncom.COINIT_MULTITHREADED),
-    finalize=pythoncom.CoUninitialize,
+    finalize=_finish_uia_apartment,
 )
 
 
@@ -712,6 +721,9 @@ def uia_action(request):
     return handle(request)
 
 
+APP_CONTROLLER = AppController()
+
+
 def build_handlers():
     context = {
         "find_uia": find_uia,
@@ -722,6 +734,11 @@ def build_handlers():
         "physical_input_default": PHYSICAL_INPUT_DEFAULT,
     }
     table = {
+        "app_catalog": APP_CONTROLLER.catalog,
+        "app_open": APP_CONTROLLER.open,
+        "app_observe": APP_CONTROLLER.observe,
+        "app_act": APP_CONTROLLER.act,
+        "app_wait": APP_CONTROLLER.wait,
         "capabilities": capabilities,
         "describe": describe,
         "selftest": selftest,
@@ -788,7 +805,7 @@ def handle(a):
     dispatcher = None
     if spec["group"] in {"com", "adapter"}:
         dispatcher = COM_DISPATCHER
-    elif spec["group"] in {"uia", "screen", "win32", "physical"}:
+    elif spec["group"] in {"uia", "screen", "win32", "physical", "app"}:
         dispatcher = UIA_DISPATCHER
     if dispatcher is not None:
         started = False

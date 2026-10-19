@@ -31,8 +31,8 @@ BROWSER_TARGET = {
 
 WORKFLOW = [
     "1. capabilities -> pick a group; describe {name} -> exact parameters.",
-    "2. adapter_list -> if an adapter covers the target app, use adapter_call.",
-    "3. Otherwise prefer: browser (DOM) / com_* / uia_* / win32_message.",
+    "2. Universal desktop: app_catalog -> app_observe {hwnd} -> app_act {ref,operation,request_id} -> app_wait.",
+    "3. Choose a supported interface: browser (DOM/CDP), UIA, Win32, CLI or COM. App-specific adapters are optional.",
     "   Browser: tabs -> explicit tab_id -> snapshot/frames -> action -> inspect expected state.",
     "   Desktop: windows -> uia_tree -> uia_inspect supported patterns and state -> action -> verify.",
     "   Use look (desktop_look) to see a window when UIA/DOM do not explain its state.",
@@ -76,6 +76,26 @@ ACTIONS = {
     ),
     "selftest": _spec("discovery", "read", "Check browser, UIA, COM, adapters, file handoff and security settings."),
     "status": _spec("discovery", "read", "Agent pid, screen, cursor, active window and browser status."),
+    # --- application-independent semantic control ------------------------
+    "app_catalog": _spec("app", "read", "Discover running windows and registered App Paths executables without launching applications.",
+                         {"query": "substring in name/title/path", "limit": "1..300 per section; default 100"}),
+    "app_open": _spec("app", "exec", "Launch an explicit executable without shell, optionally observe its windows; not proof of document readiness.",
+                      {"executable": "existing absolute .exe path", "args": "array of strings", "cwd": "absolute working directory",
+                       "timeout": "seconds to observe a window, 0..30, default 0", "dry_run": "report plan without launching"},
+                      required=("executable",)),
+    "app_observe": _spec("app", "read", "Observe any accessible Windows application; negotiate UIA/Win32 and return short-lived control refs and supported operations.",
+                         {"hwnd": "exact window handle from app_catalog", "pid": "optional expected process ID",
+                          "backend": "auto | uia | win32", "depth": "0..8", "limit": "1..300 nodes", "max_text": "0..4000 characters per field"},
+                         required=("hwnd",), example={"action": "app_observe", "hwnd": 1234}),
+    "app_act": _spec("app", "write", "Apply one semantic operation to an observed ref; optional precondition, dry run, read-back and bounded request replay. Never physical fallback.",
+                     {"ref": "live ref from app_observe", "operation": "invoke | set_value | set_checked | select | expand | collapse | scroll_into_view",
+                      "request_id": "unique attempt ID; same ID/arguments retrieves cached result for 120 seconds",
+                      "value": "text or number for set_value", "checked": "boolean for set_checked", "expected": "expected current state object",
+                      "dry_run": "validate without writing", "commit": "literal true required for invoke after user authorization"},
+                     required=("ref", "operation", "request_id")),
+    "app_wait": _spec("app", "read", "Wait for an observed control to match a state predicate; no write retries.",
+                      {"ref": "live ref", "expected": "nonempty value/checked/selected/expanded/enabled/visible object", "timeout": "seconds, 0..30"},
+                      required=("ref", "expected")),
     # --- windows / UIA ---------------------------------------------------
     "windows": _spec(
         "uia", "read", "List top-level windows.",
@@ -264,6 +284,9 @@ ACTIONS = {
 }
 
 BROWSER_ACTIONS = {
+    "attach": _spec("browser", "write", "Attach an explicitly exposed local Chromium/Electron CDP session without copying credentials.",
+                    {"endpoint": "ws://127.0.0.1:<port>/devtools/browser/<id> or IPv6 loopback", "timeout": "milliseconds, <=30000"}, required=("endpoint",)),
+    "detach": _spec("browser", "write", "Disconnect a borrowed CDP session without closing its application or saving its state."),
     "status": ("read", "Bridge state.", {}),
     "restart": ("write", "Restart the browser context.", {"headed": "bool, default: keep current"}),
     "open": ("write", "Navigate to url (alias goto).", {"url": "str", "waitUntil": "str", "timeout": "ms"}),
