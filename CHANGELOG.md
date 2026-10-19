@@ -4,6 +4,8 @@ All notable changes are documented here.
 
 ## [Unreleased]
 
+## [1.1.9] - 2026-10-19
+
 ### Added
 
 - Application-independent `desktop_app` MCP tool and `app_catalog`, `app_open`,
