@@ -19,13 +19,22 @@ SELECTOR = (
 )
 LOCATOR = (
     "one of: selector (CSS), role + name, label, placeholder, testid, text; "
-    "optional exact=true"
+    "optional exact=true; matches must be unique unless nth (zero-based) is explicit"
 )
+BROWSER_TARGET = {
+    "tab_id": "stable live tab ID from tabs/newTab; omit to use current tab",
+    "frame_id": "live frame ID from frames (alternative to frame_selector)",
+    "frame_selector": "iframe CSS selector or list of selectors for nested frames",
+    "nth": "zero-based locator match; omit to require exactly one match",
+    "timeout": "operation timeout in milliseconds",
+}
 
 WORKFLOW = [
     "1. capabilities -> pick a group; describe {name} -> exact parameters.",
     "2. adapter_list -> if an adapter covers the target app, use adapter_call.",
     "3. Otherwise prefer: browser (DOM) / com_* / uia_* / win32_message.",
+    "   Browser: tabs -> explicit tab_id -> snapshot/frames -> action -> inspect expected state.",
+    "   Desktop: windows -> uia_tree -> uia_inspect supported patterns and state -> action -> verify.",
     "   Use look (desktop_look) to see a window when UIA/DOM do not explain its state.",
     "4. Physical input (move, click, key, ...) is last resort and needs allow_physical=true.",
     "5. Externally visible browser clicks (send, pay, delete, ...) need commit=true after user confirmation.",
@@ -74,6 +83,12 @@ ACTIONS = {
     ),
     "active_window": _spec("uia", "read", "Foreground window: hwnd, title, pid, process, rect."),
     "uia_info": _spec("uia", "read", "Properties of one window/control.", UIA_TARGET),
+    "uia_inspect": _spec(
+        "uia", "read", "Inspect supported UIA patterns and current value, text, toggle, selection and expansion state.",
+        dict(UIA_TARGET, max_text="0..20000 characters, default 4000; password values/text are redacted"),
+        example={"action": "uia_inspect", "window": {"title_re": "Notepad"},
+                 "control": {"control_type": "Edit"}},
+    ),
     "uia_tree": _spec(
         "uia", "read", "Control tree under a window.",
         dict(UIA_TARGET, depth="0..8, default 3", limit="1..1000, default 200"),
@@ -86,7 +101,8 @@ ACTIONS = {
     ),
     "uia_wait": _spec(
         "uia", "read", "Wait for a control state.",
-        dict(UIA_TARGET, state="default 'exists enabled visible ready'", timeout="seconds, default 10"),
+        dict(UIA_TARGET, state="exists | visible | enabled | ready | active (space separated); absent/not_exists/hidden/disabled/inactive",
+             timeout="seconds, 0..120, default 10", retry_interval="seconds between checks, 0.01..2, default 0.2"),
     ),
     "uia_click": _spec(
         "uia", "write", "Invoke a control semantically; falls back to a physical click only with allow_physical.",
@@ -252,10 +268,21 @@ BROWSER_ACTIONS = {
     "restart": ("write", "Restart the browser context.", {"headed": "bool, default: keep current"}),
     "open": ("write", "Navigate to url (alias goto).", {"url": "str", "waitUntil": "str", "timeout": "ms"}),
     "goto": ("write", "Navigate to url.", {"url": "str", "waitUntil": "str", "timeout": "ms"}),
-    "snapshot": ("read", "ARIA snapshot of the page: the primary way to see the page.", {}),
+    "snapshot": ("read", "ARIA snapshot of the target page or frame: the primary way to see it.", {}),
+    "frames": ("read", "Discover live frames of the target tab for embedded and nested forms.",
+               {"max_frames": "1..200, default 100"}),
+    "inspect": ("read", "Inspect one element's bounded state, value, checked state and select options; passwords redacted.",
+                {"locator": LOCATOR, "max_length": "1..4000 characters per field, default 500",
+                 "max_options": "1..200 options, default 50"}),
     "click": ("write", "Click a locator.", {"locator": LOCATOR, "timeout": "ms"}),
     "fill": ("write", "Fill an input.", {"locator": LOCATOR, "value": "str"}),
     "type": ("write", "Type key by key.", {"locator": LOCATOR, "value": "str", "delay": "ms"}),
+    "selectOption": ("write", "Select native dropdown options and return selected values.",
+                     {"locator": LOCATOR, "value": "option value string or list of values"}),
+    "setChecked": ("write", "Set a checkbox/radio to an explicit state and verify it.",
+                   {"locator": LOCATOR, "checked": "bool"}),
+    "hover": ("write", "Hover over a DOM element to expose menus without moving the OS pointer.", {"locator": LOCATOR}),
+    "scrollIntoView": ("write", "Scroll an element into view in the target page/frame.", {"locator": LOCATOR}),
     "press": ("write", "Press a key on a locator or the page.", {"locator": LOCATOR + " (optional)", "key": "str"}),
     "wait": ("read", "Wait ms or for a locator state.", {"ms": "int", "locator": LOCATOR, "state": "str"}),
     "text": ("read", "innerText of a locator.", {"locator": LOCATOR}),
@@ -268,10 +295,10 @@ BROWSER_ACTIONS = {
     "cookies": ("read", "Read cookies, or clear=true.", {"urls": "list", "clear": "bool"}),
     "storage": ("read", "Read/set/clear local or session storage.", {"kind": "local | session",
                                                                      "set": "object", "clear": "bool"}),
-    "tabs": ("read", "List tabs.", {}),
+    "tabs": ("read", "List tabs with stable tab_id values and legacy indexes.", {}),
     "newTab": ("write", "Open a tab.", {"url": "optional"}),
-    "useTab": ("write", "Switch tab.", {"index": "int"}),
-    "closeTab": ("write", "Close a tab.", {"index": "int, default current"}),
+    "useTab": ("write", "Switch tab.", {"tab_id": "live tab ID", "index": "legacy index, alternative to tab_id"}),
+    "closeTab": ("write", "Close a tab.", {"tab_id": "live tab ID", "index": "legacy index, default current"}),
     "console": ("read", "Recent console messages.", {"limit": "int", "clear": "bool"}),
     "errors": ("read", "Recent page errors.", {"limit": "int", "clear": "bool"}),
     "back": ("write", "History back.", {}),
@@ -331,6 +358,19 @@ def describe_action(name):
 
 def describe_browser(name):
     effect, summary, params = BROWSER_ACTIONS[name]
+    params = dict(params)
+    if name not in {"status", "restart", "close", "tabs", "newTab", "cookies"}:
+        params.setdefault("tab_id", BROWSER_TARGET["tab_id"])
+    if name in {
+        "open", "goto", "url", "snapshot", "click", "fill", "type", "press", "wait",
+        "text", "html", "inspect", "selectOption", "setChecked", "hover",
+        "scrollIntoView", "upload", "download", "evaluate", "storage",
+    }:
+        params.update({key: BROWSER_TARGET[key] for key in ("frame_id", "frame_selector")})
+    if "locator" in params:
+        params["nth"] = BROWSER_TARGET["nth"]
+    if name not in {"status", "close", "tabs", "console", "errors", "frames", "cookies"}:
+        params.setdefault("timeout", BROWSER_TARGET["timeout"])
     return {
         "name": name,
         "effect": effect,

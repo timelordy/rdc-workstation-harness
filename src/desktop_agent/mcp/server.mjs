@@ -5,6 +5,7 @@ import http from 'node:http';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
+import { registerControlTools } from './control-tools.mjs';
 
 const HOME = process.env.USERPROFILE || os.homedir();
 const TOKEN_DIR = process.env.RDC_HARNESS_TOKEN_DIR || path.join(HOME, '.chatgpt-desktop-agent');
@@ -188,6 +189,8 @@ server.registerTool(
   },
   async ({ request: actionRequest }) => callAction(actionRequest)
 );
+
+registerControlTools(server, callAction);
 
 
 server.registerTool(

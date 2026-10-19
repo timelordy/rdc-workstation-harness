@@ -184,7 +184,19 @@ def call_adapter(a, context):
             hint=f"describe {{adapter: '{name}'}}",
             valid_actions=sorted(actions),
         )
-    return json_safe(handler(payload, context))
+    # Adapters run on the COM STA owner. UIA wrappers must never cross into
+    # that apartment: use the broker callback, which returns plain data.
+    adapter_context = dict(context)
+    adapter_context["find_uia"] = _adapter_raw_uia_unavailable
+    adapter_context["window_info"] = _adapter_raw_uia_unavailable
+    return json_safe(handler(payload, adapter_context))
+
+
+def _adapter_raw_uia_unavailable(*args, **kwargs):
+    raise ActionError(
+        "raw UIA wrappers are not available inside adapters",
+        hint="use context['uia_action']({action: 'uia_inspect', window: ..., control: ...}); it returns plain data",
+    )
 
 
 def install_adapter(a):
