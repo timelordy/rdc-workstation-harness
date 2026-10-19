@@ -51,6 +51,21 @@ Remote Desktop Commander Remote
 `desktop_describe` — параметры и пример конкретного действия или адаптера.
 Подробнее: [каталог действий](docs/ARCHITECTURE_RU.md#каталог-действий-и-самоописание).
 
+### Структурированное управление
+
+- `desktop_browser` открывает browser actions непосредственно в MCP: вкладки с
+  устойчивым `tab_id`, дерево frames, проверка полей через `inspect`, заполнение
+  dropdown/checkbox через `selectOption`/`setChecked`.
+- `desktop_inspect` / `uia_inspect` читает UIA patterns и состояние контрола:
+  текст, значение, выделение, checkbox, раскрытие. Парольные значения скрыты.
+- Browser locators требуют единственного совпадения. Выбор `nth` явный;
+  закрытый `tab_id` не перенаправляется на случайную соседнюю вкладку.
+- Browser commands выполняются последовательно. COM proxies остаются на
+  отдельном STA-потоке, UIA — на MTA-потоке.
+
+План дальнейшего развития, включая обычные вкладки браузера и Revit API:
+[больше способов управления ПК](docs/CONTROL_ROADMAP_RU.md).
+
 ## Быстрый запуск
 
 Требования: Windows 10/11, Python 3.10+, Node.js 18+ и Git.
@@ -178,6 +193,7 @@ tests/               static security/regression checks
 - [ChatGPT (веб): pc-agent и скриншоты в чат](docs/CHATGPT_RU.md)
 - [Личные данные и репозиторий](docs/LOCAL_PRIVATE_RU.md)
 - [Browser Bridge](docs/BROWSER_BRIDGE_RU.md)
+- [Развитие управления: UIA, браузер, приложения и Revit](docs/CONTROL_ROADMAP_RU.md)
 - [Эксплуатация](docs/OPERATIONS_RU.md)
 - [Навигатор обновлений](docs/UPDATES_RU.md)
 - [Устранение проблем](docs/TROUBLESHOOTING_RU.md)

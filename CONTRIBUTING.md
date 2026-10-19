@@ -22,9 +22,24 @@ credentials and stop-words outside Git: see `docs/LOCAL_PRIVATE_RU.md`.
 python -m compileall -q src tools tests
 node --check src\browser_bridge\bridge.js
 node --check src\desktop_agent\mcp\server.mjs
-node --test tests/share_hook.test.mjs
+npm ci --prefix src/desktop_agent/mcp --ignore-scripts --no-audit --no-fund
+npm ci --prefix src/browser_bridge --ignore-scripts --no-audit --no-fund
+node --test tests/share_hook.test.mjs tests/control_tools.test.mjs tests/browser_bridge.test.mjs
 python -m unittest discover -s tests -v
 ```
+
+Browser behaviour also has an isolated loopback fixture test. CI requires it;
+locally, install Chromium and opt in before running it:
+
+```powershell
+Push-Location src/browser_bridge
+npx --no-install playwright install chromium
+Pop-Location
+$env:RDC_BROWSER_INTEGRATION = "1"
+node --test tests/browser_bridge.integration.test.mjs
+```
+
+The fixture uses a temporary browser profile and no signed-in accounts.
 
 Parse all PowerShell scripts as CI does and run `scripts\diagnose.ps1` on a
 Windows test account. Do not test against production projects or personal

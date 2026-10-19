@@ -223,6 +223,59 @@ class AgentRuntimeTests(unittest.TestCase):
         _, released = self.call({"action": "com_release", "handle": handle})
         self.assertTrue(released["result"]["released"])
 
+    def test_com_object_can_be_used_across_independent_http_requests(self):
+        status, created = self.call({"action": "com_create", "progid": "Scripting.Dictionary"})
+        self.assertEqual(200, status, created)
+        handle = created["result"]["handle"]
+        try:
+            status, called = self.call({
+                "action": "com_call", "handle": handle, "path": "Add", "args": ["synthetic-key", 7],
+            })
+            self.assertEqual(200, status, called)
+            status, count = self.call({"action": "com_get", "handle": handle, "path": "Count"})
+            self.assertEqual(200, status, count)
+            self.assertEqual(1, count["result"]["value"])
+        finally:
+            self.call({"action": "com_release", "handle": handle})
+
+    def test_uia_wait_for_absent_synthetic_window(self):
+        status, result = self.call({
+            "action": "uia_wait", "window": {"title": "rdc-test-absent-window-93de1d4a"},
+            "state": "absent", "timeout": 0.1,
+        })
+        self.assertEqual(200, status, result)
+        self.assertFalse(result["result"]["exists"])
+
+    def test_uia_input_escape_requires_opt_in_before_window_resolution(self):
+        status, result = self.call({
+            "action": "uia_call", "window": {"title": "rdc-test-absent-window-93de1d4a"},
+            "method": "type_keys", "args": ["synthetic text"],
+        })
+        self.assertEqual(403, status, result)
+        self.assertIn("disabled by default", result["error"])
+
+    def test_adapter_uia_callback_stays_on_broker_and_raw_wrappers_are_rejected(self):
+        name = "rdc_runtime_uia_context_test"
+        code = '''DESCRIPTION = "Synthetic adapter context test"
+ACTIONS = {"safe": {"effect": "read"}, "raw": {"effect": "read"}}
+def handle(payload, context):
+    if payload["action"] == "raw":
+        return context["find_uia"]({"title": "rdc-test-absent-window-93de1d4a"})
+    return context["uia_action"]({"action": "uia_wait", "window": {"title": "rdc-test-absent-window-93de1d4a"}, "state": "absent", "timeout": 0.1})
+'''
+        path = AGENT.parent / "adapters" / (name + ".py")
+        try:
+            status, installed = self.call({"action": "adapter_install", "name": name, "code": code})
+            self.assertEqual(200, status, installed)
+            status, result = self.call({"action": "adapter_call", "name": name, "payload": {"action": "safe"}})
+            self.assertEqual(200, status, result)
+            self.assertFalse(result["result"]["exists"])
+            status, result = self.call({"action": "adapter_call", "name": name, "payload": {"action": "raw"}})
+            self.assertEqual(400, status, result)
+            self.assertIn("uia_action", result["hint"])
+        finally:
+            path.unlink(missing_ok=True)
+
 
 if __name__ == "__main__":
     unittest.main()

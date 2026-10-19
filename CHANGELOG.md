@@ -2,6 +2,37 @@
 
 All notable changes are documented here.
 
+## [Unreleased]
+
+### Added
+
+- Stable live browser tab IDs, frame discovery/targeting, bounded element state
+  inspection, native select/checkbox controls, hover and scroll-into-view.
+- `uia_inspect` exposes supported UIA patterns and bounded text/value, toggle,
+  selection, expansion and range state, with password redaction.
+- Discoverable MCP tools `desktop_browser` and `desktop_inspect`; the existing
+  generic action and terminal paths remain available.
+- Portable queue/UIA behaviour tests, browser fixture tests and a staged roadmap
+  for existing browser sessions, application discovery and a Revit API adapter.
+
+### Fixed
+
+- Browser requests share one queue; page listeners are registered once and
+  explicitly targeted closed tabs are not silently replaced by the current tab.
+- Browser locators no longer silently choose the first match. Existing ambiguous
+  callers must refine their locator or pass an explicit zero-based `nth`.
+- `uia_wait` waits on an unresolved WindowSpecification, including disappearance,
+  instead of resolving a wrapper before the control exists.
+- Persistent STA ownership for COM/adapter calls and a separate MTA owner for
+  UIA prevent application proxies from crossing unrelated HTTP request threads.
+- Known physical wrapper methods invoked through `uia_call` require the same
+  explicit physical-input opt-in as direct physical actions.
+- Unstarted queued actions expire instead of executing after a long queue wait;
+  completed browser actions remain successful when only storage-state saving
+  fails, with an explicit persistence warning.
+- Adapter UIA calls use a JSON-returning broker callback; legacy raw UIA helper
+  access inside adapters fails with migration guidance.
+
 ## [0.2.3] - 2026-09-28
 
 ### Security

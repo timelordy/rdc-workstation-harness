@@ -44,11 +44,28 @@ transport: stdio
   Окно снимается в фоне без фокуса; для GPU-окон, где фоновый снимок чёрный,
   берутся видимые пиксели экрана;
 - `desktop_action` — передать structured action;
+- `desktop_browser` — browser request с типизированными полями для tab/frame,
+  locator, fill/selectOption/setChecked; `commit` передаётся отдельно;
+- `desktop_inspect` — семантическое состояние Windows-контрола и поддерживаемые
+  UIA patterns с ограничением текста и скрытием парольных значений;
 - `desktop_send_file` — вернуть локальный файл как MCP resource (токены и
   профили отдать нельзя).
 
 Proxy ждёт ответа не меньше, чем `timeout` самого действия (секунды для
 desktop actions, миллисекунды для browser payload), максимум час.
+
+Пример browser workflow в MCP:
+
+```text
+desktop_browser({request: {action: "tabs"}})
+desktop_browser({request: {action: "snapshot", tab_id: "<ID из tabs>"}})
+desktop_browser({request: {action: "fill", tab_id: "<ID из tabs>", label: "Project name", value: "Demo"}})
+desktop_browser({request: {action: "inspect", tab_id: "<ID из tabs>", label: "Project name"}})
+```
+
+ID берутся из ответа текущей сессии. Встроенный `desktop_browser` работает с
+профилем Harness. Подключение к обычным вкладкам Chrome/Edge описано как
+следующий этап в [плане развития](CONTROL_ROADMAP_RU.md).
 
 Первый вызов после подключения:
 

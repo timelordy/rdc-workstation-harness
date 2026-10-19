@@ -46,9 +46,23 @@ class CatalogContractTests(unittest.TestCase):
         self.assertEqual(set(), set(CATALOG.ACTIONS) - handlers, "catalog entries without handler")
 
     def test_browser_catalog_matches_bridge(self):
-        bridge = (ROOT / "src" / "browser_bridge" / "bridge.js").read_text(encoding="utf-8")
+        bridge = "\n".join(path.read_text(encoding="utf-8")
+                           for path in (ROOT / "src" / "browser_bridge").glob("*.js"))
         implemented = set(re.findall(r"a\.action === '([A-Za-z]+)'", bridge))
+        for choices in re.findall(r"\[([^\]]+)\]\.includes\(a\.action\)", bridge):
+            implemented.update(re.findall(r"'([A-Za-z]+)'", choices))
         self.assertEqual(implemented, set(CATALOG.BROWSER_ACTIONS))
+
+    def test_typed_browser_tool_matches_catalog(self):
+        source = (AGENT_DIR / "mcp" / "control-tools.mjs").read_text(encoding="utf-8")
+        array = re.search(r"BROWSER_ACTION_NAMES = \[([^\]]+)\]", source).group(1)
+        names = set(re.findall(r"'([A-Za-z]+)'", array))
+        self.assertEqual(set(CATALOG.BROWSER_ACTIONS), names)
+
+    def test_browser_describe_exposes_explicit_targets(self):
+        info = CATALOG.describe_browser("setChecked")
+        for key in ("tab_id", "frame_id", "frame_selector", "nth", "checked"):
+            self.assertIn(key, info["params"])
 
     def test_specs_are_complete(self):
         effects = {"read", "write", "exec", "physical"}

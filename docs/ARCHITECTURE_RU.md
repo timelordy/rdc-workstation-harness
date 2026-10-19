@@ -45,8 +45,21 @@ watchdog/диагностике.
 - staging готовых файлов для совместимого MCP-клиента;
 - физический ввод только с явным разрешением конкретного запроса.
 
-Сервер использует `ThreadingHTTPServer`, но состояние COM и объектов остаётся
-процессным. Адаптер должен сам учитывать потоковую модель целевого API.
+HTTP-сервер принимает параллельные запросы. COM и адаптеры выполняются на одном
+STA owner thread, UIA/Win32/physical input — на отдельном MTA owner thread.
+Создание, использование и освобождение COM handles остаются в одном apartment.
+Браузер и процессы не занимают эти desktop workers.
+
+Очередь каждого desktop worker ограничена 256 ожидающими вызовами и 10 секундами
+ожидания старта. Истёкшая команда не исполняется позже; ответ содержит
+`QUEUE_TIMEOUT` и `action_started: false`. Если timeout произошёл внутри уже
+запущенного адаптера, `action_started: true` относится к внешнему adapter call.
+Уже начатую нативную COM/UIA операцию очередь принудительно не прерывает.
+
+Для UIA внутри адаптера используйте `context['uia_action'](request)`, который
+возвращает обычные данные. Raw helpers `find_uia`/`window_info` в adapter context
+отклоняются: UIA wrappers не должны покидать свой owner thread. Прикладной SDK
+может требовать ещё более узкий контекст, например Revit ExternalEvent.
 
 ## Каталог действий и самоописание
 
@@ -55,7 +68,7 @@ watchdog/диагностике.
 пример. Из него же строятся диспетчер, `capabilities` и `describe`, поэтому
 модель видит ровно то, что агент умеет. Тест `test_catalog.py` падает, если
 обработчик добавлен без описания или наоборот, а также если список browser
-actions разошёлся с `bridge.js`.
+actions разошёлся с реализацией Browser Bridge или типизированным MCP tool.
 
 Типичный путь модели:
 
@@ -76,7 +89,13 @@ desktop_action {...}            -> вызов
 `src/browser_bridge/bridge.js` запускает persistent Playwright context. Он
 автоматически ищет Brave, Chrome и Edge; при отсутствии использует установленный
 Chromium Playwright. Управление строится на locator-ах: role/name, label,
-placeholder, test id, text или CSS selector.
+placeholder, test id, text или CSS selector. Locator по умолчанию строгий;
+`nth` требуется для явного позиционного выбора.
+
+`browser_session.js` управляет browser context, очередью и живыми идентификаторами
+вкладок/frames. Генерация ID уникальна для процесса/session, поэтому старый ID
+не указывает на новый объект после рестарта. `bridge.js` оставляет transport,
+loopback/token boundary и создание локальных каталогов.
 
 Профиль, downloads и screenshots лежат вне Git. Bridge сохраняет storage state,
 но эта информация остаётся локальной и считается чувствительной.

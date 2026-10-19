@@ -4,26 +4,35 @@ import os
 import re
 import secrets
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 from pathlib import Path
 
+# pywinauto/comtypes may create their shared UIA client during import. Keep the
+# main thread in the same MTA as the dedicated UIA worker from the beginning.
+sys.coinit_flags = 0
+
 import mss
 import mss.tools
 import psutil
 import pyautogui
 import pyperclip
+import pythoncom
 import win32gui
 import win32process
 import win32com.client
 import catalog
 import core_ext
+import uia_support
 from core_ext import ActionError
+from dispatch import QueueWaitTimeout, SerialDispatcher
 from pywinauto import Desktop
 from pywinauto.findwindows import ElementNotFoundError
 from pywinauto.keyboard import send_keys
+from pywinauto.timings import TimeoutError as UiaTimeoutError
 
 HOST = "127.0.0.1"  # Deliberately not configurable: never expose this service directly.
 PORT = int(os.getenv("DESKTOP_AGENT_PORT", "17322"))
@@ -50,6 +59,26 @@ BROWSER_AUDIT_LOG = Path(os.getenv(
     "RDC_HARNESS_AUDIT_LOG",
     str(HOME / ".rdc-workstation-harness" / "logs" / "browser-actions.ndjson"),
 ))
+
+
+def _finish_com_apartment():
+    # Drop proxies while their owning apartment is still alive.
+    core_ext.OBJECTS.clear()
+    core_ext._ADAPTER_CACHE.clear()
+    pythoncom.CoUninitialize()
+
+
+COM_DISPATCHER = SerialDispatcher(
+    "desktop-com-sta",
+    initialize=lambda: pythoncom.CoInitializeEx(pythoncom.COINIT_APARTMENTTHREADED),
+    finalize=_finish_com_apartment,
+    idle=pythoncom.PumpWaitingMessages,
+)
+UIA_DISPATCHER = SerialDispatcher(
+    "desktop-uia-mta",
+    initialize=lambda: pythoncom.CoInitializeEx(pythoncom.COINIT_MULTITHREADED),
+    finalize=pythoncom.CoUninitialize,
+)
 
 
 def rect_dict(rect):
@@ -83,11 +112,11 @@ def active_window_info():
             "right": rect[2], "bottom": rect[3],
         },
     }
-def window_info(w):
+def window_info(w, redact_text=False, use_name=False):
     try:
         info = w.element_info
         return {
-            "title": w.window_text(),
+            "title": "[redacted]" if redact_text else (info.name if use_name else w.window_text()),
             "control_type": info.control_type,
             "automation_id": info.automation_id,
             "class_name": info.class_name,
@@ -98,6 +127,8 @@ def window_info(w):
             "rect": rect_dict(w.rectangle()),
         }
     except Exception as e:
+        if redact_text or use_name:
+            return {"error": type(e).__name__, "message": "control metadata unavailable"}
         return {"error": str(e)}
 
 
@@ -130,6 +161,11 @@ def find_uia(a):
 
 
 def _find_uia(a):
+    return uia_spec(a).wrapper_object()
+
+
+def uia_spec(a):
+    """Build a lazy WindowSpecification so waits can start before UI exists."""
     desktop = Desktop(backend="uia")
     if a.get("window"):
         window_criteria = selector_kwargs(a["window"])
@@ -141,12 +177,12 @@ def _find_uia(a):
             if not control_criteria:
                 raise ActionError("control selector required", hint=catalog.SELECTOR)
             spec = spec.child_window(**control_criteria)
-        return spec.wrapper_object()
+        return spec
 
     criteria = selector_kwargs(a)
     if not criteria:
         raise ActionError("UIA selector required", hint="pass window={title_re:...} or top-level selector fields")
-    return desktop.window(**criteria).wrapper_object()
+    return desktop.window(**criteria)
 
 
 def save_screenshot(a):
@@ -200,9 +236,15 @@ def forward_browser(payload):
             body = json.loads(e.read().decode("utf-8"))
         except Exception:
             raise e
+        if not isinstance(body, dict):
+            raise e
+        details = {key: body[key] for key in ("code", "count", "action_started") if key in body}
+        if isinstance(body.get("hint"), str):
+            details["bridge_hint"] = body["hint"]
         raise ActionError(
             "browser: " + str(body.get("error") or e),
             hint="describe {browser: '<action>'} for parameters",
+            **details,
         ) from None
 
 
@@ -353,7 +395,7 @@ def do_window_op(a):
         raise ActionError(f"Unknown window op: {op}", hint="focus | minimize | maximize | restore | close")
     return {"op": op, "control": window_info(ctrl)}
 def require_physical(a):
-    if not bool(a.get("allow_physical", PHYSICAL_INPUT_DEFAULT)):
+    if a.get("allow_physical", PHYSICAL_INPUT_DEFAULT) is not True:
         raise PermissionError(
             "Physical mouse/keyboard input is disabled by default. "
             "Use a semantic/background action, or set allow_physical=true explicitly."
@@ -361,10 +403,12 @@ def require_physical(a):
 
 
 def uia_call(a):
-    ctrl = find_uia(a)
     method_name = a.get("method")
-    if not method_name or method_name.startswith("_"):
+    if not isinstance(method_name, str) or not method_name or method_name.startswith("_"):
         raise ActionError("public method required")
+    if uia_support.is_physical_method(method_name):
+        require_physical(a)
+    ctrl = find_uia(a)
     method = getattr(ctrl, method_name, None)
     if not callable(method):
         raise ActionError(f"UIA control has no callable method: {method_name}")
@@ -374,6 +418,12 @@ def uia_call(a):
         "result": core_ext.json_safe(result),
         "control": window_info(ctrl),
     }
+
+
+def _selftest_com():
+    dictionary = win32com.client.Dispatch("Scripting.Dictionary")
+    dictionary.Add("desktop_agent", 1)
+    return {"ok": dictionary.Count == 1}
 
 
 def selftest(a):
@@ -390,7 +440,7 @@ def selftest(a):
         checks["browser"] = {"ok": False, "error": str(e)}
 
     try:
-        windows = list_windows({"limit": 20})
+        windows = UIA_DISPATCHER.call(list_windows, {"limit": 20})
         checks["uia"] = {
             "ok": True,
             "window_count_sample": len(windows),
@@ -399,14 +449,12 @@ def selftest(a):
         checks["uia"] = {"ok": False, "error": str(e)}
 
     try:
-        d = win32com.client.Dispatch("Scripting.Dictionary")
-        d.Add("desktop_agent", 1)
-        checks["com"] = {"ok": d.Count == 1}
+        checks["com"] = COM_DISPATCHER.call(_selftest_com)
     except Exception as e:
         checks["com"] = {"ok": False, "error": str(e)}
 
     try:
-        adapters = core_ext.list_adapters()
+        adapters = COM_DISPATCHER.call(core_ext.list_adapters)
         failed = [item["name"] for item in adapters if item.get("load_error")]
         checks["adapters"] = {
             "ok": not failed,
@@ -491,10 +539,33 @@ def cursor(a):
 
 
 def uia_wait(a):
-    ctrl = find_uia(a)
-    state = a.get("state", "exists enabled visible ready")
-    ctrl.wait(state, timeout=float(a.get("timeout", 10)))
-    return {"ok": True, "control": window_info(ctrl)}
+    try:
+        # Validate before building the selector, then wait on the specification
+        # instead of resolving a wrapper that may not exist yet.
+        uia_support.wait_options(a)
+        spec = uia_spec(a)
+        result = uia_support.wait_for_spec(spec, a)
+    except ValueError as error:
+        if isinstance(error, ActionError):
+            raise
+        raise ActionError(str(error), hint="describe {name: 'uia_wait'}") from None
+    except UiaTimeoutError:
+        raise ActionError(
+            "control did not reach the requested state before timeout",
+            hint="inspect windows/uia_find and retry with the expected state",
+            state=a.get("state", "exists enabled visible ready"), timeout=a.get("timeout", 10),
+        ) from None
+    # Do not resolve an absent control or reintroduce the wrapper's default
+    # lookup timeout after the requested wait has already completed.
+    return result
+
+
+def uia_inspect(a):
+    try:
+        limit = uia_support.text_limit(a.get("max_text", 4000))
+    except ValueError as error:
+        raise ActionError(str(error), hint="describe {name: 'uia_inspect'}") from None
+    return uia_support.inspect_control(find_uia(a), window_info, max_text=limit)
 
 
 def uia_find(a):
@@ -618,12 +689,12 @@ def describe(a):
                               did_you_mean=catalog.suggest(name, catalog.BROWSER_ACTIONS))
         return catalog.describe_browser(name)
     if a.get("adapter"):
-        return core_ext.describe_adapter(a["adapter"])
+        return COM_DISPATCHER.call(core_ext.describe_adapter, a["adapter"])
     name = a.get("name")
     if name in catalog.ACTIONS:
         return catalog.describe_action(name)
     if name in adapter_names():
-        return core_ext.describe_adapter(name)
+        return COM_DISPATCHER.call(core_ext.describe_adapter, name)
     raise ActionError(
         f"nothing to describe: {name}",
         hint="pass name=<action>, browser=<browser action> or adapter=<adapter>",
@@ -631,10 +702,21 @@ def describe(a):
     )
 
 
+def uia_action(request):
+    """Adapter entrypoint: operate in the UIA apartment and return plain data."""
+    if not isinstance(request, dict):
+        raise ActionError("uia_action request must be an object")
+    spec = catalog.ACTIONS.get(request.get("action"))
+    if not spec or spec["group"] not in {"uia", "screen", "win32", "physical"}:
+        raise ActionError("uia_action requires a UIA, screen, Win32 or physical action")
+    return handle(request)
+
+
 def build_handlers():
     context = {
         "find_uia": find_uia,
         "window_info": window_info,
+        "uia_action": uia_action,
         "forward_browser": forward_browser,
         "artifact_dir": str(ARTIFACT_DIR),
         "physical_input_default": PHYSICAL_INPUT_DEFAULT,
@@ -647,6 +729,7 @@ def build_handlers():
         "windows": lambda a: {"items": list_windows(a)},
         "active_window": lambda a: active_window_info(),
         "uia_info": lambda a: window_info(find_uia(a)),
+        "uia_inspect": uia_inspect,
         "uia_tree": uia_tree,
         "uia_find": uia_find,
         "uia_wait": uia_wait,
@@ -699,6 +782,37 @@ def handle(a):
         )
     if spec["effect"] == "physical":
         require_physical(a)
+    # HTTP request threads must not create or reuse apartment-bound proxies.
+    # COM and adapters share one STA owner; UIA and real input share one MTA
+    # owner so concurrent callers cannot interleave a click/paste sequence.
+    dispatcher = None
+    if spec["group"] in {"com", "adapter"}:
+        dispatcher = COM_DISPATCHER
+    elif spec["group"] in {"uia", "screen", "win32", "physical"}:
+        dispatcher = UIA_DISPATCHER
+    if dispatcher is not None:
+        started = False
+
+        def execute():
+            nonlocal started
+            started = True
+            return handler(a)
+
+        try:
+            return dispatcher.call(execute)
+        except QueueWaitTimeout as error:
+            raise ActionError(
+                str(error), hint="wait for the busy application before retrying; inspect state if action_started is true",
+                code="QUEUE_TIMEOUT", queue_timeout=True, action_started=started,
+            ) from None
+        except ActionError as error:
+            # An adapter may already have written before a nested uia_action
+            # times out in the other queue. Do not label the whole adapter call
+            # as unstarted merely because that nested UIA step was canceled.
+            if error.extra.get("queue_timeout") and started:
+                error.extra["action_started"] = True
+                error.hint = "adapter action started before a nested queue timeout; inspect state before retrying"
+            raise
     return handler(a)
 
 
@@ -777,8 +891,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    # DESKTOP_AGENT_THREADED=0 serves requests one at a time on the main thread:
-    # slower under parallel calls, but every COM call then runs on one STA thread.
+    # This only changes HTTP concurrency. Apartment-bound automation always
+    # stays on its persistent owner threads in both modes.
     threaded = os.getenv("DESKTOP_AGENT_THREADED", "1") != "0"
     server = (ThreadingHTTPServer if threaded else HTTPServer)((HOST, PORT), Handler)
     print(json.dumps({
@@ -789,7 +903,12 @@ def main():
         "threaded": threaded,
         "artifact_dir": str(ARTIFACT_DIR),
     }, ensure_ascii=True), flush=True)
-    server.serve_forever()
+    try:
+        server.serve_forever()
+    finally:
+        server.server_close()
+        UIA_DISPATCHER.close()
+        COM_DISPATCHER.close()
 
 
 if __name__ == "__main__":
