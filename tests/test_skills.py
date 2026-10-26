@@ -133,6 +133,25 @@ class SkillRegistryTests(unittest.TestCase):
         (package / "contract.json").write_text("", encoding="utf-8")
         self.assertEqual([], self.registry.list()["skills"])
 
+    def test_local_operator_policy_is_bounded_and_pinned_for_clients(self):
+        profile = self.root / ".rdc-workstation-harness" / "codex-profile"
+        profile.mkdir(parents=True)
+        policy = profile / "WORKSTATION_POLICY.md"
+        policy.write_text("Use kill-slop for code and humanizer for prose.\n", encoding="utf-8")
+        with mock.patch.dict(os.environ, {"USERPROFILE": str(self.root)}):
+            listed = self.registry.list()
+            advice = listed["operator_policy"]
+            self.assertEqual("local-user-profile", advice["source"])
+            self.assertIn("kill-slop", advice["content"])
+            resolved = self.registry.resolve("Review the code")
+            self.assertEqual(advice, resolved["operator_policy"])
+            policy.write_text("Different guidance.\n", encoding="utf-8")
+            self.assertNotEqual(advice["sha256"], self.registry.list()["operator_policy"]["sha256"])
+            policy.write_text("x" * 8193, encoding="utf-8")
+            with self.assertRaises(SKILLS.SkillError) as caught:
+                self.registry.list()
+            self.assertEqual("SKILL_TOO_LARGE", caught.exception.code)
+
     def test_workspace_requires_exact_locally_configured_trust(self):
         self.package(self.workspace / ".agents" / "skills")
         result = self.registry.list(str(self.workspace))

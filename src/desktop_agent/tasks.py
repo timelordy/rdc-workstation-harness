@@ -325,6 +325,7 @@ class TaskRuntime:
             "state": "prepared", "assurance": "none", "created_at": created, "updated_at": created,
             "revision": 0, "skills": skills, "checks": checks,
             "candidates": resolved.get("candidates", []), "warnings": warnings,
+            "operator_policy": resolved.get("operator_policy"),
             "events": [],
         }
         self._event(document, "prepared")

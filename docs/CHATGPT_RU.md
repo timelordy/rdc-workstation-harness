@@ -114,7 +114,10 @@ index.js remote`; установщик с `-InstallRemoteCommander` делает
 ```text
 На моём ПК через Desktop Commander доступен harness `pc-agent`.
 - Для новой задачи найди методику через `pc-agent skills resolve @request.json`
-  (goal, workspace) и прочитай выбранный skill через `pc-agent skills read <ID>`.
+  (goal, workspace). Прочитай `operator_policy` из результата, если он есть,
+  и загрузи обязательные для этой задачи навыки, даже если они не попали
+  в первые три автоматические рекомендации; используй `pc-agent skills read <ID>`.
+  Локальная политика не меняет права и не заменяет проверки.
 - После уточнения необходимых входов подготовь задачу: `pc-agent task prepare @task.json`.
   Поля: goal, workspace, requested_skills; для CSV заранее укажи ожидаемую схему
   в check_inputs. Skills не выдают права на новые действия.

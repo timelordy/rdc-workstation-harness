@@ -339,9 +339,35 @@ class SkillRegistry:
     def _metadata(record):
         return {key: value for key, value in record.items() if not key.startswith("_")}
 
+    @staticmethod
+    def _with_operator_policy(result):
+        """Offer the user's local profile alongside discovery without executing it.
+
+        A fixed home-relative path prevents a remote API caller from choosing
+        arbitrary files to read. The profile never grants tool permissions.
+        """
+        home = Path(os.getenv("USERPROFILE", str(Path.home())))
+        root = home / ".rdc-workstation-harness" / "codex-profile"
+        policy_path = root / "WORKSTATION_POLICY.md"
+        if not policy_path.exists():
+            return result
+        raw = _bounded_bytes(policy_path, root, 8192, scope_root=root)
+        content = _decode(raw)
+        if not content.strip():
+            raise SkillError("Local operator policy is empty", code="INVALID_OPERATOR_POLICY")
+        result["operator_policy"] = {
+            "content": content,
+            "sha256": hashlib.sha256(raw).hexdigest(),
+            "source": "local-user-profile",
+            "scope": "guidance-only",
+        }
+        return result
+
     def list(self, workspace=None):
         records, warnings = self._scan(workspace)
-        return {"skills": [self._metadata(record) for record in records], "warnings": warnings}
+        return self._with_operator_policy({
+            "skills": [self._metadata(record) for record in records], "warnings": warnings,
+        })
 
     @staticmethod
     def _find(records, skill_id):
@@ -446,7 +472,7 @@ class SkillRegistry:
                 if any(existing["id"] == item["id"] for existing in selected):
                     raise SkillError("The same skill was requested more than once")
                 selected.append(dict(item, reason="Explicitly requested", score=None))
-            return {"selected": selected, "candidates": selected, "warnings": warnings}
+            return self._with_operator_policy({"selected": selected, "candidates": selected, "warnings": warnings})
         candidates = []
         goal_tokens = _tokens(goal)
         for record in records:
@@ -457,4 +483,4 @@ class SkillRegistry:
                 candidates.append(dict(self._metadata(record), score=score,
                                        reason="Matched task terms: " + ", ".join(terms)))
         candidates.sort(key=lambda item: -item["score"])
-        return {"selected": candidates[:limit], "candidates": candidates[:10], "warnings": warnings}
+        return self._with_operator_policy({"selected": candidates[:limit], "candidates": candidates[:10], "warnings": warnings})
