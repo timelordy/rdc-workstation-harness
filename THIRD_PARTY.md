@@ -17,8 +17,9 @@ licenses and trademarks.
 | Pillow | image handling | 11.3.0 | PyPI, HPND |
 | psutil | process inspection | 7.0.0 | PyPI, BSD-3-Clause |
 | pyperclip | clipboard fallback | 1.9.0 | PyPI, BSD-3-Clause |
+| PyYAML | bounded, safe skill metadata parsing | 6.0.3 | PyPI, MIT |
 
-Versions in this table are the versions used to build and test release 0.1.0;
+Versions in this table track the dependencies pinned in this checkout;
 they are not a statement that newer releases do not exist. Lockfiles and
 `requirements.txt` are the source of truth for reproducible installation.
 

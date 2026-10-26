@@ -76,6 +76,7 @@ class RepositoryContractTests(unittest.TestCase):
         self.assertNotIn('$Config += @"', installer)
         self.assertIn("`$env:NODE_EXE", installer)
         self.assertIn("Write-PowerShellFile $ConfigPath $Config", installer)
+        self.assertIn('GetEnvironmentVariable("RDC_HARNESS_SKILL_DIRS", "User")', installer)
         self.assertIn('$Config += "`r`n`$env:PW_EXECUTABLE', installer)
 
     def test_pc_agent_is_installed_on_path(self):

@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "required_capabilities": [],
+  "match_terms": ["form", "forms", "checkbox", "dropdown", "форму", "формы", "заполн*", "переключател*"],
+  "checks": [
+    {"id": "target", "title": "Подтверждены точная форма, документ и разрешённый объём действий", "kind": "manual", "required": true, "allow_not_applicable": false},
+    {"id": "fields", "title": "Входные значения сопоставлены с полями без пропуска обязательных данных", "kind": "manual", "required": true, "allow_not_applicable": false},
+    {"id": "readback", "title": "Значения перечитаны после заполнения и ошибки валидации проверены", "kind": "manual", "required": true, "allow_not_applicable": false},
+    {"id": "submission", "title": "Исход разрешённой отправки подтверждён или отправка не входила в задачу", "kind": "manual", "required": true, "allow_not_applicable": true},
+    {"id": "result", "title": "Сообщены фактический результат и все непроверенные условия", "kind": "manual", "required": true, "allow_not_applicable": false}
+  ]
+}

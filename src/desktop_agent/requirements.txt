@@ -5,3 +5,4 @@ PyAutoGUI==0.9.54
 pyperclip==1.9.0
 pywin32==311
 pywinauto==0.6.9
+PyYAML==6.0.3

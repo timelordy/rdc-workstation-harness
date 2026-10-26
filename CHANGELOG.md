@@ -4,6 +4,43 @@ All notable changes are documented here.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-26
+
+### Added
+
+- Bounded discovery, selection and progressive loading of trusted Agent Skills
+  through `skill_list`, `skill_resolve`, and `skill_read`. Workspace skills require
+  locally configured trust; discovery never executes bundled code.
+- Three bundled methods: `validate-table`, `fill-form`, and `verify-export`, with
+  explicit completion contracts. CSV expectations are declared before validation.
+- A local SQLite task journal with prepare/status/check/finish/resume, pinned skill
+  instructions and versions, complete check coverage, and manual versus machine
+  evidence. File/CSV checks stay within the task workspace and outputs are rechecked
+  at completion. Resumption never replays application commands.
+- Changed artifact evidence invalidates old manual conclusions. A selected skill
+  without a completion contract cannot inherit another skill's verified outcome.
+- Shared MCP tools `desktop_skills`, `desktop_prepare_task`, `desktop_task`, and
+  equivalent `pc-agent skills` / `pc-agent task` commands. Raw action calls remain
+  compatible. `pc-agent describe --browser` / `--adapter` exposes exact parameters.
+- Portable registry, task persistence, verifier and client-schema tests, plus an
+  authenticated Windows router test. PyYAML 6.0.3 is pinned for metadata parsing.
+
+### Fixed
+
+- Browser `attach` and `detach` descriptions no longer fail on mixed catalog shapes.
+  Every browser action is covered by a self-description regression check.
+- Routing instructions consistently select an interface by the required operation;
+  app-specific adapters remain optional.
+- Desktop health and MCP initialization read the product VERSION in both checkout
+  and installed layouts. Installation includes bundled skills and version metadata.
+
+### Limits
+
+- The task journal records context and evidence; it does not execute durable jobs,
+  deduplicate external effects, sandbox arbitrary code, or guarantee model compliance.
+- Built-in automatic verifiers cover bounded local files and UTF-8 CSV/TSV. Manual
+  checks remain explicitly self-reported; incomplete checks do not close a task.
+
 ## [1.1.9] - 2026-10-19
 
 ### Added

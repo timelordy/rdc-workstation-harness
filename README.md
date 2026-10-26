@@ -54,6 +54,20 @@ Remote Desktop Commander Remote
 `desktop_describe` — параметры и пример конкретного действия или адаптера.
 Подробнее: [каталог действий](docs/ARCHITECTURE_RU.md#каталог-действий-и-самоописание).
 
+### Skills и задачи
+
+`desktop_prepare_task` / `pc-agent task prepare` выбирает методику для цели,
+возвращает инструкции и сохраняет обязательные проверки в локальном SQLite-журнале.
+Встроены `validate-table`, `fill-form`, `verify-export`; пользовательские и проектные
+skills подключаются из явно настроенных доверенных каталогов. Discovery не запускает
+код пакетов. MCP и CLI используют один реестр и состояние задачи.
+
+`task_check` различает наблюдения клиента и серверную проверку файла/CSV.
+`task_finish` учитывает все обязательные проверки и заново проверяет выходные файлы;
+`task_resume` возвращает закреплённые инструкции после обрыва, не повторяя действия.
+Это журнал контекста и результатов, не автономный планировщик и не песочница.
+Настройка, примеры и ограничения: [skills и проверяемые задачи](docs/SKILLS_RU.md).
+
 ### Структурированное управление
 
 - `desktop_app`: `catalog` → `open` при необходимости → `observe` → `act` →
@@ -201,6 +215,7 @@ tests/               static security/regression checks
 - [Архитектура и маршрутизация](docs/ARCHITECTURE_RU.md)
 - [Remote Desktop Commander](docs/REMOTE_COMMANDER_RU.md)
 - [Подключение MCP-клиента](docs/MCP_CLIENT_RU.md)
+- [Skills, контракты проверки и продолжение задач](docs/SKILLS_RU.md)
 - [ChatGPT (веб): pc-agent и скриншоты в чат](docs/CHATGPT_RU.md)
 - [Личные данные и репозиторий](docs/LOCAL_PRIVATE_RU.md)
 - [Browser Bridge](docs/BROWSER_BRIDGE_RU.md)

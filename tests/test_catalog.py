@@ -64,6 +64,21 @@ class CatalogContractTests(unittest.TestCase):
         for key in ("tab_id", "frame_id", "frame_selector", "nth", "checked"):
             self.assertIn(key, info["params"])
 
+    def test_every_browser_action_can_describe_itself(self):
+        for name in CATALOG.BROWSER_ACTIONS:
+            with self.subTest(action=name):
+                info = CATALOG.describe_browser(name)
+                self.assertEqual(name, info["name"])
+                self.assertTrue(info["summary"])
+                self.assertIn(info["effect"], {"read", "write", "exec", "physical"})
+                self.assertIsInstance(info["params"], dict)
+
+    def test_session_actions_do_not_claim_a_tab_target(self):
+        self.assertIn("endpoint", CATALOG.describe_browser("attach")["params"])
+        for name in ("attach", "detach"):
+            self.assertNotIn("tab_id", CATALOG.describe_browser(name)["params"])
+            self.assertNotIn("frame_id", CATALOG.describe_browser(name)["params"])
+
     def test_specs_are_complete(self):
         effects = {"read", "write", "exec", "physical"}
         for name, spec in CATALOG.ACTIONS.items():

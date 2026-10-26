@@ -1,0 +1,5 @@
+{
+  "action": "task_prepare",
+  "goal": "Подготовить форму и проверить значения полей без отправки",
+  "requested_skills": ["builtin:fill-form"]
+}
