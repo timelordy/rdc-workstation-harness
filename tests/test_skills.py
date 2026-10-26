@@ -31,6 +31,7 @@ class SkillRegistryTests(unittest.TestCase):
             directory.mkdir()
         environment = mock.patch.dict(os.environ, {
             "RDC_HARNESS_SKILL_DIRS": "", "RDC_HARNESS_TRUSTED_WORKSPACES": "[]",
+            "USERPROFILE": str(self.root),  # isolate local operator policy from fixture checks
         })
         environment.start()
         self.addCleanup(environment.stop)
