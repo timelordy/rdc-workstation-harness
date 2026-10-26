@@ -264,6 +264,12 @@ $Config = @"
 if ($BrowserExe) {
     $Config += "`r`n`$env:PW_EXECUTABLE = '$(Quote-Single $BrowserExe)'`r`n"
 }
+# User-owned skill directories persist across installer/update runs and do not
+# need to be copied into the public repository or the replaceable runtime.
+$UserSkillDirs = [Environment]::GetEnvironmentVariable("RDC_HARNESS_SKILL_DIRS", "User")
+if ($UserSkillDirs) {
+    $Config += "`r`n`$env:RDC_HARNESS_SKILL_DIRS = '$(Quote-Single $UserSkillDirs)'`r`n"
+}
 Write-PowerShellFile $ConfigPath $Config
 
 $DesktopRunner = Join-Path $InstallRoot "run-desktop-agent.ps1"
