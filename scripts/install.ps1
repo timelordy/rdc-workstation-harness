@@ -187,6 +187,8 @@ Copy-Item -LiteralPath (Join-Path $RepoRoot "scripts\update.ps1") `
     -Destination $MaintenanceDir -Force
 Copy-Item -LiteralPath (Join-Path $RepoRoot "VERSION") `
     -Destination $InstallRoot -Force
+Copy-Item -LiteralPath (Join-Path $RepoRoot "VERSION") `
+    -Destination $DesktopDir -Force
 Copy-Item -LiteralPath (Join-Path $RepoRoot "CHANGELOG.md") `
     -Destination $InstallRoot -Force
 

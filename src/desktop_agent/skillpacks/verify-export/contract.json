@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "required_capabilities": [],
+  "match_terms": ["export", "exports", "download", "downloads", "экспорт*", "выгруз*", "скача*"],
+  "checks": [
+    {"id": "target", "title": "Подтверждены источник, область экспорта и критерии результата", "kind": "manual", "required": true, "allow_not_applicable": false},
+    {"id": "settings", "title": "Проверены формат, настройки и безопасное назначение", "kind": "manual", "required": true, "allow_not_applicable": false},
+    {"id": "output-file", "title": "Выходной файл существует и доступен для чтения", "kind": "file_exists", "required": true, "allow_not_applicable": false},
+    {"id": "content-review", "title": "Проверены идентичность, полнота и содержимое нового результата", "kind": "manual", "required": true, "allow_not_applicable": false},
+    {"id": "result", "title": "Сообщены расположение файла и все ограничения проверки", "kind": "manual", "required": true, "allow_not_applicable": false}
+  ]
+}

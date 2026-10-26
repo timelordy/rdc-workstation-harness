@@ -30,6 +30,9 @@ import uia_support
 from app_control import AppController
 from core_ext import ActionError
 from dispatch import QueueWaitTimeout, SerialDispatcher
+from runtime_version import VERSION
+from skills import SkillError, SkillRegistry
+from tasks import TaskError, TaskRuntime
 from pywinauto import Desktop
 from pywinauto.findwindows import ElementNotFoundError
 from pywinauto.keyboard import send_keys
@@ -687,7 +690,10 @@ def adapter_names():
 
 
 def capabilities(a):
-    return catalog.capabilities(adapter_names())
+    result = catalog.capabilities(adapter_names())
+    result["version"] = VERSION
+    result["task_workflow"] = "skill_resolve -> task_prepare -> actions -> task_check -> task_finish; task_resume after interruption"
+    return result
 
 
 def describe(a):
@@ -722,6 +728,8 @@ def uia_action(request):
 
 
 APP_CONTROLLER = AppController()
+SKILL_REGISTRY = SkillRegistry()
+TASK_RUNTIME = TaskRuntime(registry=SKILL_REGISTRY)
 
 
 def build_handlers():
@@ -734,6 +742,19 @@ def build_handlers():
         "physical_input_default": PHYSICAL_INPUT_DEFAULT,
     }
     table = {
+        "skill_list": lambda a: SKILL_REGISTRY.list(workspace=a.get("workspace")),
+        "skill_read": lambda a: SKILL_REGISTRY.read(
+            a.get("skill_id"), workspace=a.get("workspace"), resource=a.get("resource"),
+            expected_hash=a.get("expected_hash")),
+        "skill_resolve": lambda a: SKILL_REGISTRY.resolve(
+            a.get("goal"), workspace=a.get("workspace"), requested_skills=a.get("requested_skills"),
+            limit=a.get("limit", 3)),
+        "task_prepare": TASK_RUNTIME.prepare,
+        "task_status": TASK_RUNTIME.status,
+        "task_check": TASK_RUNTIME.check,
+        "task_finish": TASK_RUNTIME.finish,
+        "task_resume": TASK_RUNTIME.resume,
+        "task_list": TASK_RUNTIME.list,
         "app_catalog": APP_CONTROLLER.catalog,
         "app_open": APP_CONTROLLER.open,
         "app_observe": APP_CONTROLLER.observe,
@@ -847,11 +868,15 @@ def error_payload(action, error):
         if error.hint:
             body["hint"] = error.hint
         body.update(core_ext.json_safe(error.extra))
+    if isinstance(error, (SkillError, TaskError)):
+        body["code"] = error.code
+        if error.hint:
+            body["hint"] = error.hint
     return body
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "RdcHarness/0.1"
+    server_version = f"RdcHarness/{VERSION}"
     sys_version = ""
     def _send(self, status, payload):
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -873,6 +898,7 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, {
             "ok": True,
             "ready": True,
+            "version": VERSION,
             "pid": os.getpid(),
             "port": PORT,
         })
@@ -900,7 +926,7 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             if isinstance(e, PermissionError):
                 status = 403
-            elif isinstance(e, (ActionError, KeyError, json.JSONDecodeError)):
+            elif isinstance(e, (ActionError, SkillError, TaskError, KeyError, json.JSONDecodeError)):
                 status = 400
             else:
                 status = 500

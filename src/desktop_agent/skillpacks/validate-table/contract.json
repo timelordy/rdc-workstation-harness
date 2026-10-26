@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "required_capabilities": [],
+  "match_terms": ["csv", "tsv", "таблиц*", "дубликат*", "duplicate", "duplicates", "spreadsheet"],
+  "checks": [
+    {"id": "input-review", "title": "Подтверждены источник, смысл строки и требования к таблице", "kind": "manual", "required": true, "allow_not_applicable": false},
+    {"id": "schema", "title": "CSV/TSV-результат соответствует заранее заданной схеме", "kind": "csv_schema", "required": true, "allow_not_applicable": false},
+    {"id": "duplicates", "title": "Проверены пропуски и дубликаты согласованного ключа", "kind": "manual", "required": true, "allow_not_applicable": false},
+    {"id": "reconciliation", "title": "Сверены число строк и причины изменений", "kind": "manual", "required": true, "allow_not_applicable": false},
+    {"id": "output-file", "title": "Выходной файл существует и доступен для чтения", "kind": "file_exists", "required": true, "allow_not_applicable": false},
+    {"id": "output-review", "title": "Результат повторно прочитан и ограничения сообщены", "kind": "manual", "required": true, "allow_not_applicable": false}
+  ]
+}

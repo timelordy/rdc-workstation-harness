@@ -50,6 +50,8 @@ jobs:
           node --check src/browser_bridge/bridge.js
           node --check src/desktop_agent/mcp/server.mjs
           node --check src/desktop_agent/mcp/control-tools.mjs
+          node --check src/desktop_agent/mcp/task-tools.mjs
+          node --check src/desktop_agent/mcp/runtime-version.mjs
           node --check tools/rdc_share_hook.mjs
       - name: Validate PowerShell syntax
         shell: pwsh
@@ -78,6 +80,6 @@ jobs:
       - name: Run Node and real browser tests
         env:
           RDC_BROWSER_INTEGRATION: "1"
-        run: node --test tests/share_hook.test.mjs tests/control_tools.test.mjs tests/browser_bridge.test.mjs tests/browser_bridge.integration.test.mjs tests/cdp_attach.test.mjs tests/cdp_attach.integration.test.mjs
+        run: node --test tests/share_hook.test.mjs tests/control_tools.test.mjs tests/task_tools.test.mjs tests/runtime_version.test.mjs tests/browser_bridge.test.mjs tests/browser_bridge.integration.test.mjs tests/cdp_attach.test.mjs tests/cdp_attach.integration.test.mjs
       - name: Run regression tests
         run: python -m unittest discover -s tests -v

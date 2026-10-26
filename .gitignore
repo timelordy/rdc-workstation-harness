@@ -19,6 +19,10 @@ browser-profile/
 storage-state.json
 browser_state.json
 cookies*.json
+.rdc-workstation-harness/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
 
 # Generated data
 *.log

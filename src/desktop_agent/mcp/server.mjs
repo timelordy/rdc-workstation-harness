@@ -6,6 +6,8 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { registerControlTools } from './control-tools.mjs';
+import { registerTaskTools } from './task-tools.mjs';
+import { runtimeVersion } from './runtime-version.mjs';
 
 const HOME = process.env.USERPROFILE || os.homedir();
 const TOKEN_DIR = process.env.RDC_HARNESS_TOKEN_DIR || path.join(HOME, '.chatgpt-desktop-agent');
@@ -104,7 +106,7 @@ async function callAction(payload) {
 
 const server = new McpServer({
   name: 'desktop-agent',
-  version: '1.2.0',
+  version: runtimeVersion,
 });
 
 server.registerTool(
@@ -127,9 +129,10 @@ server.registerTool(
   'desktop_capabilities',
   {
     title: 'Desktop Agent Capabilities',
-    description: 'Start here. Lists every action of the local Windows desktop agent grouped by area '
+    description: 'Lists every action of the local Windows desktop agent grouped by area '
       + '(uia, com, process, browser, adapter, physical, ...) with its effect (read/write/exec/physical), '
-      + 'all browser actions, installed app adapters and the recommended routing order.',
+      + 'all browser actions, installed app adapters and routing guidance. '
+      + 'For a new goal-based workflow, desktop_prepare_task also supplies relevant skills and completion checks.',
     inputSchema: z.object({}),
   },
   async () => callAction({ action: 'capabilities' })
@@ -180,8 +183,9 @@ server.registerTool(
     title: 'Desktop Agent Action',
     description: 'Execute one desktop-agent request: {"action": "<name>", ...params}. '
       + 'Get names from desktop_capabilities and parameters from desktop_describe. '
-      + 'Routing: app adapter (adapter_call) > browser DOM / COM > UIA > Win32 > physical input '
-      + '(needs allow_physical=true). Externally visible browser clicks (send/pay/delete) need '
+      + 'Choose a supported interface for the requested operation: DOM/CDP, COM, CLI, UIA or Win32. '
+      + 'App adapters are optional. Physical input is the last fallback and needs allow_physical=true. '
+      + 'Externally visible browser clicks (send/pay/delete) need '
       + 'commit=true and prior user confirmation. Errors return a hint and valid alternatives.',
     inputSchema: z.object({
       request: z.record(z.string(), z.any()).describe('Request object with an action field, e.g. {"action":"windows","title_re":"Excel"}.'),
@@ -191,6 +195,7 @@ server.registerTool(
 );
 
 registerControlTools(server, callAction);
+registerTaskTools(server, callAction);
 
 
 server.registerTool(

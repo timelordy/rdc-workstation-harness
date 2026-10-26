@@ -42,6 +42,9 @@ class AgentRuntimeTests(unittest.TestCase):
             RDC_HARNESS_TOKEN_DIR=str(tmp / "tokens"),
             DESKTOP_AGENT_ARTIFACT_DIR=str(tmp / "artifacts"),
             RDC_HARNESS_AUDIT_LOG=str(tmp / "audit.ndjson"),
+            RDC_HARNESS_STATE_DIR=str(tmp / "task-state"),
+            RDC_HARNESS_SKILL_DIRS="",
+            RDC_HARNESS_TRUSTED_WORKSPACES="[]",
         )
         cls.proc = subprocess.Popen(
             [sys.executable, str(AGENT)], env=env,
@@ -114,6 +117,37 @@ class AgentRuntimeTests(unittest.TestCase):
         _, body = self.call({"action": "describe", "adapter": "autocad"})
         self.assertTrue(body["result"]["manifest"])
         self.assertIn("status", body["result"]["actions"])
+
+    def test_skill_task_workflow_runs_through_authenticated_router(self):
+        status, body = self.call({"action": "skill_list"})
+        self.assertEqual(200, status, body)
+        skills = body["result"]["skills"]
+        skill = next(item for item in skills if item["name"] == "verify-export")
+        status, body = self.call({"action": "skill_read", "skill_id": skill["id"]})
+        self.assertEqual(200, status, body)
+        self.assertIn("content", body["result"])
+        status, body = self.call({"action": "task_prepare", "goal": "Verify a test export",
+                                  "workspace": self.tmp.name, "requested_skills": [skill["id"]]})
+        self.assertEqual(200, status, body)
+        task_id = body["result"]["task_id"]
+        self.assertTrue(body["result"]["checks"])
+        status, body = self.call({"action": "task_finish", "task_id": task_id})
+        self.assertEqual(200, status, body)
+        self.assertFalse(body["result"]["completed"])
+        self.assertTrue(body["result"]["coverage"]["blockers"])
+        status, body = self.call({"action": "task_resume", "task_id": task_id})
+        self.assertEqual(200, status, body)
+        self.assertTrue(body["result"]["skills"][0]["content"])
+        self.assertFalse(body["result"]["completed"])
+
+    def test_invalid_skill_task_inputs_are_client_errors(self):
+        for request in ({"action": "skill_read", "skill_id": "../outside"},
+                        {"action": "task_status", "task_id": "invalid"},
+                        {"action": "task_prepare", "goal": "   "}):
+            with self.subTest(request=request):
+                status, body = self.call(request)
+                self.assertEqual(400, status, body)
+                self.assertIn("code", body)
 
     def test_unknown_action_suggests(self):
         status, body = self.call({"action": "uia_clik"})

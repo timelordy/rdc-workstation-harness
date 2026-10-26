@@ -30,7 +30,8 @@ BROWSER_TARGET = {
 }
 
 WORKFLOW = [
-    "1. capabilities -> pick a group; describe {name} -> exact parameters.",
+    "1. For a new task, skill_resolve or task_prepare -> relevant instructions and completion checks. Skills never grant permissions.",
+    "   capabilities -> pick a supported interface; describe {name} -> exact parameters.",
     "2. Universal desktop: app_catalog -> app_observe {hwnd} -> app_act {ref,operation,request_id} -> app_wait.",
     "3. Choose a supported interface: browser (DOM/CDP), UIA, Win32, CLI or COM. App-specific adapters are optional.",
     "   Browser: tabs -> explicit tab_id -> snapshot/frames -> action -> inspect expected state.",
@@ -38,6 +39,7 @@ WORKFLOW = [
     "   Use look (desktop_look) to see a window when UIA/DOM do not explain its state.",
     "4. Physical input (move, click, key, ...) is last resort and needs allow_physical=true.",
     "5. Externally visible browser clicks (send, pay, delete, ...) need commit=true after user confirmation.",
+    "6. Record every required task check; task_finish reports incomplete work and distinguishes reported from machine-verified evidence.",
 ]
 
 UIA_TARGET = {
@@ -59,6 +61,54 @@ def _spec(group, effect, summary, params=None, required=(), example=None):
 
 
 ACTIONS = {
+    # Skills are instructions; tasks track evidence, not autonomous execution.
+    "skill_list": _spec(
+        "skills", "read", "Discover trusted skill metadata without executing code or loading every instruction.",
+        {"workspace": "optional absolute workspace; project skills require configured trust"},
+    ),
+    "skill_resolve": _spec(
+        "skills", "read", "Suggest relevant skills for a goal; no match is a valid result.",
+        {"goal": "non-empty task goal", "workspace": "optional absolute workspace",
+         "requested_skills": "optional list of explicit skill IDs", "limit": "1..3"},
+        ("goal",),
+    ),
+    "skill_read": _spec(
+        "skills", "read", "Read one trusted SKILL.md or a bounded relative resource; never execute its scripts.",
+        {"skill_id": "ID from skill_list/skill_resolve", "workspace": "optional absolute workspace",
+         "resource": "optional relative resource path", "expected_hash": "optional pinned skill SHA-256"},
+        ("skill_id",),
+    ),
+    "task_prepare": _spec(
+        "tasks", "write", "Prepare a local task journal with pinned skills and explicit completion checks; executes no app actions.",
+        {"goal": "non-empty task goal", "workspace": "optional absolute existing directory",
+         "requested_skills": "optional list of explicit skill IDs",
+         "check_inputs": "optional map of qualified check ID to fixed verifier expectations"},
+        ("goal",),
+    ),
+    "task_status": _spec(
+        "tasks", "read", "Read persisted task status, evidence and missing checks.",
+        {"task_id": "ID returned by task_prepare"}, ("task_id",),
+    ),
+    "task_check": _spec(
+        "tasks", "write", "Record reported evidence or run a built-in file verifier; machine checks cannot be self-marked passed.",
+        {"task_id": "task ID", "check_id": "qualified check ID from task_prepare",
+         "status": "manual only: passed | failed | not_applicable | unknown",
+         "evidence": "manual evidence text", "reason": "explanation, required for not_applicable",
+         "path": "automatic verifier only: file within pinned task workspace"},
+        ("task_id", "check_id"),
+    ),
+    "task_finish": _spec(
+        "tasks", "write", "Revalidate artifacts and account for every required check before reporting completion.",
+        {"task_id": "task ID"}, ("task_id",),
+    ),
+    "task_resume": _spec(
+        "tasks", "read", "Restore pinned task instructions and evidence; re-observe live targets and never replay writes blindly.",
+        {"task_id": "task ID"}, ("task_id",),
+    ),
+    "task_list": _spec(
+        "tasks", "read", "List recent local task summaries.",
+        {"limit": "optional bounded result count"},
+    ),
     # --- discovery -------------------------------------------------------
     "capabilities": _spec(
         "discovery", "read",
@@ -284,9 +334,9 @@ ACTIONS = {
 }
 
 BROWSER_ACTIONS = {
-    "attach": _spec("browser", "write", "Attach an explicitly exposed local Chromium/Electron CDP session without copying credentials.",
-                    {"endpoint": "ws://127.0.0.1:<port>/devtools/browser/<id> or IPv6 loopback", "timeout": "milliseconds, <=30000"}, required=("endpoint",)),
-    "detach": _spec("browser", "write", "Disconnect a borrowed CDP session without closing its application or saving its state."),
+    "attach": ("write", "Attach an explicitly exposed local Chromium/Electron CDP session without copying credentials.",
+               {"endpoint": "ws://127.0.0.1:<port>/devtools/browser/<id> or IPv6 loopback", "timeout": "milliseconds, <=30000"}),
+    "detach": ("write", "Disconnect a borrowed CDP session without closing its application or saving its state.", {}),
     "status": ("read", "Bridge state.", {}),
     "restart": ("write", "Restart the browser context.", {"headed": "bool, default: keep current"}),
     "open": ("write", "Navigate to url (alias goto).", {"url": "str", "waitUntil": "str", "timeout": "ms"}),
@@ -382,7 +432,7 @@ def describe_action(name):
 def describe_browser(name):
     effect, summary, params = BROWSER_ACTIONS[name]
     params = dict(params)
-    if name not in {"status", "restart", "close", "tabs", "newTab", "cookies"}:
+    if name not in {"attach", "detach", "status", "restart", "close", "tabs", "newTab", "cookies"}:
         params.setdefault("tab_id", BROWSER_TARGET["tab_id"])
     if name in {
         "open", "goto", "url", "snapshot", "click", "fill", "type", "press", "wait",
@@ -392,7 +442,7 @@ def describe_browser(name):
         params.update({key: BROWSER_TARGET[key] for key in ("frame_id", "frame_selector")})
     if "locator" in params:
         params["nth"] = BROWSER_TARGET["nth"]
-    if name not in {"status", "close", "tabs", "console", "errors", "frames", "cookies"}:
+    if name not in {"detach", "status", "close", "tabs", "console", "errors", "frames", "cookies"}:
         params.setdefault("timeout", BROWSER_TARGET["timeout"])
     return {
         "name": name,

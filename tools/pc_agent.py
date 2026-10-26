@@ -7,6 +7,15 @@ base64: images are saved to disk and returned as a path to open with read_file.
   pc-agent health
   pc-agent capabilities
   pc-agent describe uia_click
+  pc-agent describe --browser attach
+  pc-agent skills list [--workspace <directory>]
+  pc-agent skills resolve @request.json
+  pc-agent skills read <skill-id> [--resource <relative-path>]
+  pc-agent task prepare @task.json
+  pc-agent task status <task-id>
+  pc-agent task check @check.json
+  pc-agent task resume <task-id>
+  pc-agent task finish <task-id>
   pc-agent look                                   whole screen
   pc-agent look --window AutoCAD                  window title regex
   pc-agent look --hwnd 133850 --max-side 1024
@@ -14,6 +23,11 @@ base64: images are saved to disk and returned as a path to open with read_file.
   pc-agent share <file>                           publish any file, print a link
   pc-agent '{"action": "windows", "title_re": "Excel"}'
   pc-agent @request.json
+
+Start a goal-based workflow with task prepare: it supplies relevant skill
+instructions and completion checks. Loading instructions does not prove they
+were followed. Task state records checks, not execution or authorization.
+Prepare/check/resolve accept a JSON object, @file, or - for stdin.
 
 Sharing: some chat clients (ChatGPT web via Remote Desktop Commander) drop
 images returned by read_file. --share hands the file to a command you choose,
@@ -159,6 +173,79 @@ def look_payload(argv):
     return payload
 
 
+def named_json_payload(action, source, allowed):
+    """Read data for a named command without allowing it to change the action."""
+    try:
+        if source == "-":
+            raw = sys.stdin.read(131073)
+        elif source.startswith("@"):
+            with Path(source[1:]).open(encoding="utf-8-sig") as stream:
+                raw = stream.read(131073)
+        else:
+            raw = source
+        if len(raw) > 131072:
+            raise ValueError("request must contain at most 131072 characters")
+        payload = json.loads(raw)
+        if not isinstance(payload, dict):
+            raise ValueError("request must be a JSON object")
+        if "action" in payload and payload["action"] != action:
+            raise ValueError(f"this command requires action={action}")
+        unknown = set(payload) - set(allowed) - {"action"}
+        if unknown:
+            raise ValueError("unknown fields: " + ", ".join(sorted(unknown)))
+    except (OSError, ValueError) as error:
+        raise SystemExit(f"{action}: {error}") from None
+    return {**payload, "action": action}
+
+
+def skills_payload(argv):
+    ap = argparse.ArgumentParser(prog="pc-agent skills", description="Discover or read trusted skills; never run their scripts.")
+    commands = ap.add_subparsers(dest="command", required=True)
+    listing = commands.add_parser("list", help="list skill metadata and discovery warnings")
+    listing.add_argument("--workspace")
+    resolve = commands.add_parser("resolve", help="select skills for a goal from JSON, @file, or -")
+    resolve.add_argument("request")
+    read = commands.add_parser("read", help="read skill instructions or one bundled text resource")
+    read.add_argument("skill_id")
+    read.add_argument("--workspace")
+    read.add_argument("--resource")
+    read.add_argument("--expected-hash", dest="expected_hash")
+    args = vars(ap.parse_args(argv))
+    command = args.pop("command")
+    if command == "resolve":
+        return named_json_payload("skill_resolve", args["request"], {"goal", "workspace", "requested_skills", "limit"})
+    return {"action": f"skill_{command}", **{key: value for key, value in args.items() if value is not None}}
+
+
+def task_payload(argv):
+    ap = argparse.ArgumentParser(prog="pc-agent task", description="Prepare and track a skill-backed task; no application actions are replayed.")
+    commands = ap.add_subparsers(dest="command", required=True)
+    for command in ("prepare", "check"):
+        parser = commands.add_parser(command, help=f"{command} using JSON, @file, or -")
+        parser.add_argument("request")
+    for command in ("status", "resume", "finish"):
+        parser = commands.add_parser(command)
+        parser.add_argument("task_id")
+    args = vars(ap.parse_args(argv))
+    command = args.pop("command")
+    if command in {"prepare", "check"}:
+        allowed = ({"goal", "workspace", "requested_skills", "check_inputs"} if command == "prepare" else
+                   {"task_id", "check_id", "path", "status", "evidence", "reason"})
+        return named_json_payload(f"task_{command}", args["request"], allowed)
+    return {"action": f"task_{command}", "task_id": args["task_id"]}
+
+
+def describe_payload(argv):
+    ap = argparse.ArgumentParser(prog="pc-agent describe")
+    ap.add_argument("name", nargs="?")
+    ap.add_argument("--browser")
+    ap.add_argument("--adapter")
+    args = {key: value for key, value in vars(ap.parse_args(argv)).items() if value is not None}
+    if len(args) != 1:
+        ap.error("provide one action name, --browser name, or --adapter name")
+    return {"action": "describe", **args}
+
+
 def parse(argv):
     if not argv:
         raw = sys.stdin.read()
@@ -168,8 +255,12 @@ def parse(argv):
     head = argv[0]
     if head == "look":
         return look_payload(argv[1:])
-    if head == "describe" and len(argv) == 2:
-        return {"action": "describe", "name": argv[1]}
+    if head == "describe":
+        return describe_payload(argv[1:])
+    if head == "skills":
+        return skills_payload(argv[1:])
+    if head == "task":
+        return task_payload(argv[1:])
     if head.startswith("@"):
         return json.loads(Path(head[1:]).read_text(encoding="utf-8"))
     if head.startswith("{"):

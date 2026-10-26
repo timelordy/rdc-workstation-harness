@@ -22,9 +22,10 @@ credentials and stop-words outside Git: see `docs/LOCAL_PRIVATE_RU.md`.
 python -m compileall -q src tools tests
 node --check src\browser_bridge\bridge.js
 node --check src\desktop_agent\mcp\server.mjs
+node --check src\desktop_agent\mcp\task-tools.mjs
 npm ci --prefix src/desktop_agent/mcp --ignore-scripts --no-audit --no-fund
 npm ci --prefix src/browser_bridge --ignore-scripts --no-audit --no-fund
-node --test tests/share_hook.test.mjs tests/control_tools.test.mjs tests/browser_bridge.test.mjs tests/cdp_attach.test.mjs
+node --test tests/share_hook.test.mjs tests/control_tools.test.mjs tests/task_tools.test.mjs tests/runtime_version.test.mjs tests/browser_bridge.test.mjs tests/cdp_attach.test.mjs
 python -m unittest discover -s tests -v
 ```
 
