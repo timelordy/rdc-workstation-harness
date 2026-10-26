@@ -21,7 +21,9 @@ class SkillRegistryTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name)
+        # Windows TEMP may use an 8.3 alias (RUNNER~1); the registry deliberately
+        # works with resolved root snapshots. Mocks must use that same identity.
+        self.root = Path(temporary.name).resolve()
         self.builtin = self.root / "builtin"
         self.user = self.root / "user"
         self.workspace = self.root / "workspace"
@@ -228,7 +230,9 @@ class SkillRegistryTests(unittest.TestCase):
         scripts.mkdir()
         marker = self.root / "executed.txt"
         source = "from pathlib import Path\nPath(" + repr(str(marker)) + ").write_text('executed')\n"
-        (scripts / "check.py").write_text(source, encoding="utf-8")
+        # Preserve fixture bytes on Windows too: write_text would translate LF
+        # to CRLF, while skill resource reads intentionally preserve the bytes.
+        (scripts / "check.py").write_bytes(source.encode("utf-8"))
         read = self.registry.read("sample-skill")
         self.assertEqual(["scripts/check.py"], read["resources"])
         resource = self.registry.read("sample-skill", resource="scripts/check.py", expected_hash=read["sha256"])
